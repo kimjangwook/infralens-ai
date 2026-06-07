@@ -1,0 +1,58 @@
+{% extends "ops/base.html" %}
+{% block title %}Webhooks - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="dashboard-head">
+    <div>
+      <p class="eyebrow">Notifications</p>
+      <h1>Webhooks</h1>
+    </div>
+    <div class="actions">
+      <a class="button primary" href="{% url 'webhook_create' %}">Add endpoint</a>
+      <a class="button secondary" href="{% url 'subscription_create' %}">Add subscription</a>
+    </div>
+  </section>
+
+  <section class="layout-two">
+    <div class="panel">
+      <div class="panel-head"><h2>Endpoints</h2></div>
+      <div class="compact-list">
+        {% for endpoint in endpoints %}
+          <div>
+            <strong>{{ endpoint.name }}</strong>
+            <span>{{ endpoint.url_hint }} / {{ endpoint.get_provider_display }}{% if not endpoint.is_active %} / disabled{% endif %}</span>
+          </div>
+        {% empty %}
+          <div class="empty-state"><strong>No endpoints.</strong></div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Subscriptions</h2></div>
+      <div class="compact-list">
+        {% for subscription in subscriptions %}
+          <div>
+            <strong>{{ subscription.account.name }}</strong>
+            <span>{{ subscription.endpoint.name }} / {{ subscription.get_min_severity_display }} and above</span>
+          </div>
+        {% empty %}
+          <div class="empty-state"><strong>No subscriptions.</strong></div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Recent deliveries</h2></div>
+    <div class="compact-list">
+      {% for delivery in deliveries %}
+        <div>
+          <strong>{{ delivery.get_status_display }} / {{ delivery.endpoint.name }}</strong>
+          <span>{{ delivery.created_at }}{% if delivery.response_code %} / HTTP {{ delivery.response_code }}{% endif %}{% if delivery.error_message %} / {{ delivery.error_message|truncatechars:90 }}{% endif %}</span>
+        </div>
+      {% empty %}
+        <div class="empty-state"><strong>No deliveries yet.</strong></div>
+      {% endfor %}
+    </div>
+  </section>
+{% endblock %}
+

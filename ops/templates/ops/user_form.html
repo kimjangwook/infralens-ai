@@ -1,0 +1,31 @@
+{% extends "ops/base.html" %}
+{% block title %}Add user - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="narrow">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Access control</p>
+          <h1>Add user</h1>
+        </div>
+      </div>
+      <form class="stack-form" method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+        {% for field in form %}
+          <label class="field checkbox-field">
+            <span>{{ field.label }}</span>
+            {{ field }}
+            {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+            {% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+        {% endfor %}
+        <div class="form-actions">
+          <button class="button primary" type="submit">Create user</button>
+          <a class="button secondary" href="{% url 'users' %}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </section>
+{% endblock %}
+

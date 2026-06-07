@@ -1,0 +1,28 @@
+{% extends "ops/base.html" %}
+{% block title %}First setup - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="narrow">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">First run</p>
+          <h1>Create owner account</h1>
+        </div>
+      </div>
+      <p class="muted">This first account becomes the owner and can manage users, global settings, and cloud account access.</p>
+      <form class="stack-form" method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+        {% for field in form %}
+          <label class="field">
+            <span>{{ field.label }}</span>
+            {{ field }}
+            {% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+        {% endfor %}
+        <button class="button primary" type="submit">Create owner</button>
+      </form>
+    </div>
+  </section>
+{% endblock %}
+

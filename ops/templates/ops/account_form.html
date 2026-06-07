@@ -1,0 +1,90 @@
+{% extends "ops/base.html" %}
+{% block title %}Add cloud account - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="narrow">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Read-only setup</p>
+          <h1>Add AWS or GCP account</h1>
+        </div>
+      </div>
+      <form class="stack-form provider-form" method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+          <div class="form-errors">{{ form.non_field_errors }}</div>
+        {% endif %}
+        <label class="field">
+          <span>{{ form.name.label }}</span>
+          {{ form.name }}
+          {% for error in form.name.errors %}<small class="error">{{ error }}</small>{% endfor %}
+        </label>
+        <label class="field">
+          <span>{{ form.provider.label }}</span>
+          {{ form.provider }}
+          {% for error in form.provider.errors %}<small class="error">{{ error }}</small>{% endfor %}
+        </label>
+
+        <section class="provider-section" data-provider-section="aws">
+          <div class="section-title">
+            <strong>AWS read-only credentials</strong>
+            <span>Used to scan EventBridge, Lambda, CloudWatch Logs, and Cost Explorer.</span>
+          </div>
+          <label class="field">
+            <span>{{ form.aws_account_ref.label }}</span>
+            {{ form.aws_account_ref }}
+            {% for error in form.aws_account_ref.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <label class="field">
+            <span>{{ form.aws_access_key_id.label }}</span>
+            {{ form.aws_access_key_id }}
+            {% for error in form.aws_access_key_id.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <label class="field">
+            <span>{{ form.aws_secret_access_key.label }}</span>
+            {{ form.aws_secret_access_key }}
+            {% for error in form.aws_secret_access_key.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <label class="field">
+            <span>{{ form.aws_session_token.label }}</span>
+            {{ form.aws_session_token }}
+            {% for error in form.aws_session_token.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <div class="field">
+            <span>{{ form.aws_regions.label }}</span>
+            <div class="choice-grid">{{ form.aws_regions }}</div>
+            {% for error in form.aws_regions.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </div>
+        </section>
+
+        <section class="provider-section" data-provider-section="gcp">
+          <div class="section-title">
+            <strong>GCP read-only service account</strong>
+            <span>Used to scan Cloud Scheduler, Cloud Run, Cloud Logging, and future Billing Export.</span>
+          </div>
+          <label class="field">
+            <span>{{ form.gcp_project_id.label }}</span>
+            {{ form.gcp_project_id }}
+            {% if form.gcp_project_id.help_text %}<small>{{ form.gcp_project_id.help_text }}</small>{% endif %}
+            {% for error in form.gcp_project_id.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <label class="field">
+            <span>{{ form.gcp_service_account_json.label }}</span>
+            {{ form.gcp_service_account_json }}
+            {% for error in form.gcp_service_account_json.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <div class="field">
+            <span>{{ form.gcp_locations.label }}</span>
+            <div class="choice-grid">{{ form.gcp_locations }}</div>
+            {% for error in form.gcp_locations.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </div>
+        </section>
+
+        <div class="form-actions">
+          <button class="button primary" type="submit">Save encrypted credentials</button>
+          <a class="button secondary" href="{% url 'dashboard' %}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </section>
+{% endblock %}

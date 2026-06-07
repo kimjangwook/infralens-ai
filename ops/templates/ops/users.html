@@ -1,0 +1,28 @@
+{% extends "ops/base.html" %}
+{% block title %}Users - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="dashboard-head">
+    <div>
+      <p class="eyebrow">Access control</p>
+      <h1>Users</h1>
+    </div>
+    <a class="button primary" href="{% url 'user_create' %}">Add user</a>
+  </section>
+
+  <section class="panel">
+    <div class="compact-list">
+      {% for user_obj in users %}
+        <div class="user-row">
+          <span>
+            <strong>{{ user_obj.username }}</strong>
+            <em>{{ user_obj.email|default:"No email" }}{% if user_obj.is_superuser %} / global admin{% endif %}</em>
+          </span>
+          <a class="button small" href="{% url 'user_access' user_obj.id %}">Access</a>
+        </div>
+      {% empty %}
+        <div class="empty-state"><strong>No users.</strong></div>
+      {% endfor %}
+    </div>
+  </section>
+{% endblock %}
+

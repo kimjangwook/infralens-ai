@@ -1,0 +1,50 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}InfraLens AI{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'ops/styles.css' %}">
+    <script src="{% static 'ops/vendor/htmx.min.js' %}" defer></script>
+    <script src="{% static 'ops/app.js' %}" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="{% url 'dashboard' %}">
+        <span class="brand-mark">IL</span>
+        <span>
+          <strong>InfraLens AI</strong>
+          <small>Read-only CloudOps briefing</small>
+        </span>
+      </a>
+      <nav class="topnav">
+        {% if request.user.is_authenticated %}
+          <a href="{% url 'dashboard' %}">Today</a>
+          {% if request.user.is_staff or request.user.is_superuser %}
+            <a href="{% url 'account_create' %}">Add cloud account</a>
+            <a href="{% url 'users' %}">Users</a>
+            <a href="{% url 'settings' %}">Settings</a>
+          {% endif %}
+          <a href="{% url 'webhooks' %}">Webhooks</a>
+          <form method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button class="nav-button" type="submit">Logout</button>
+          </form>
+        {% endif %}
+      </nav>
+    </header>
+
+    {% if messages %}
+      <section class="messages" aria-live="polite">
+        {% for message in messages %}
+          <div class="message {{ message.tags }}">{{ message }}</div>
+        {% endfor %}
+      </section>
+    {% endif %}
+
+    <main class="page">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

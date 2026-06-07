@@ -1,0 +1,27 @@
+{% extends "ops/base.html" %}
+{% block title %}Login - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="narrow">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Sign in</p>
+          <h1>InfraLens login</h1>
+        </div>
+      </div>
+      <form class="stack-form" method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+        {% for field in form %}
+          <label class="field">
+            <span>{{ field.label }}</span>
+            {{ field }}
+            {% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+        {% endfor %}
+        <button class="button primary" type="submit">Login</button>
+      </form>
+    </div>
+  </section>
+{% endblock %}
+

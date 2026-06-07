@@ -1,0 +1,17 @@
+<article class="finding-detail">
+  <span class="badge {{ finding.severity }}">{{ finding.get_severity_display }}</span>
+  <h2>{{ finding.title }}</h2>
+  <dl>
+    <dt>Account</dt>
+    <dd>{{ finding.account.name }}</dd>
+    <dt>Category</dt>
+    <dd>{{ finding.category }}</dd>
+    <dt>Resource</dt>
+    <dd>{{ finding.resource_ref|default:"-" }}</dd>
+    <dt>Suggested action</dt>
+    <dd>{{ finding.suggested_action|default:"Review the evidence and decide manually." }}</dd>
+  </dl>
+  <h3>Evidence</h3>
+  <pre class="evidence">{{ finding.evidence }}</pre>
+</article>
+

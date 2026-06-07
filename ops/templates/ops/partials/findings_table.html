@@ -1,0 +1,41 @@
+<div class="table-wrap">
+  <table class="findings-table">
+    <thead>
+      <tr>
+        <th>Severity</th>
+        <th>Finding</th>
+        <th>Category</th>
+        <th>Account</th>
+        <th>Last seen</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for finding in findings %}
+        <tr>
+          <td><span class="badge {{ finding.severity }}">{{ finding.get_severity_display }}</span></td>
+          <td>
+            <strong>{{ finding.title }}</strong>
+            <small>{{ finding.resource_ref|truncatechars:90 }}</small>
+          </td>
+          <td>{{ finding.category }}</td>
+          <td>{{ finding.account.name }}</td>
+          <td>{{ finding.last_seen_at|date:"Y-m-d H:i" }}</td>
+          <td>
+            <button class="button small"
+                    hx-get="{% url 'finding_detail' finding.id %}"
+                    hx-target="#finding-detail"
+                    type="button">Details</button>
+          </td>
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="6">
+            <div class="empty-state"><strong>No open findings.</strong></div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+

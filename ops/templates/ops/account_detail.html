@@ -1,0 +1,99 @@
+{% extends "ops/base.html" %}
+{% load markdown_extras %}
+{% block title %}{{ account.name }} - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="dashboard-head">
+    <div>
+      <p class="eyebrow">{{ account.get_provider_display }} / {{ account.account_ref }}</p>
+      <h1>{{ account.name }}</h1>
+      <p class="muted">Credential: {{ account.credentials_hint }}. Regions: {{ account.regions|join:", " }}</p>
+    </div>
+    <div class="actions">
+      <form method="post" action="{% url 'account_scan' account.id %}">
+        {% csrf_token %}
+        <button class="button primary" type="submit">Run scan</button>
+      </form>
+      <form method="post" action="{% url 'briefing_create' %}">
+        {% csrf_token %}
+        <input type="hidden" name="account_id" value="{{ account.id }}">
+        <button class="button secondary" type="submit">Generate briefing</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="metric-grid">
+    <article class="metric inventory"><span>Resources</span><strong>{{ stats.resources }}</strong></article>
+    <article class="metric schedule"><span>Schedules</span><strong>{{ stats.schedules }}</strong></article>
+    <article class="metric danger"><span>Critical</span><strong>{{ stats.critical }}</strong></article>
+    <article class="metric warning"><span>Warnings</span><strong>{{ stats.warnings }}</strong></article>
+    <article class="metric cost"><span>Scan runs</span><strong>{{ stats.scan_runs }}</strong></article>
+  </section>
+
+  <section class="layout-two">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Schedule map</p>
+          <h2>Scheduler to target</h2>
+        </div>
+      </div>
+      <div class="timeline">
+        {% for schedule in schedules %}
+          <article class="timeline-row">
+            <span>{{ schedule.schedule_expression|default:"manual" }}</span>
+            <strong>{{ schedule.name }}</strong>
+            <em>{{ schedule.target_type }} -> {{ schedule.target_ref|truncatechars:60 }}</em>
+          </article>
+        {% empty %}
+          <div class="empty-state"><strong>No schedules scanned yet.</strong></div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Briefing</p>
+          <h2>Latest account report</h2>
+        </div>
+      </div>
+      {% if briefing %}
+        <div class="briefing-html">{{ briefing.body_markdown|markdown }}</div>
+      {% else %}
+        <div class="empty-state"><strong>No account briefing yet.</strong></div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Findings</p>
+        <h2>Open actions</h2>
+      </div>
+    </div>
+    {% include "ops/partials/findings_table.html" with findings=findings %}
+  </section>
+
+  <section class="layout-two">
+    <div class="panel">
+      <div class="panel-head"><h2>Resources</h2></div>
+      <div class="compact-list">
+        {% for resource in resources %}
+          <div><strong>{{ resource.name }}</strong><span>{{ resource.resource_type }} / {{ resource.region }}</span></div>
+        {% empty %}
+          <div class="empty-state"><strong>No resources scanned yet.</strong></div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Scan history</h2></div>
+      <div class="compact-list">
+        {% for run in scan_runs %}
+          <div><strong>{{ run.get_status_display }}</strong><span>{{ run.created_at }}{% if run.error_message %} / {{ run.error_message|truncatechars:90 }}{% endif %}</span></div>
+        {% empty %}
+          <div class="empty-state"><strong>No scans yet.</strong></div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+{% endblock %}

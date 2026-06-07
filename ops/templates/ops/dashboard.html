@@ -1,0 +1,143 @@
+{% extends "ops/base.html" %}
+{% load markdown_extras %}
+{% block title %}Today - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="trust-strip">
+    <strong>Read-only by default.</strong>
+    <span>InfraLens never modifies cloud resources. Findings are evidence-backed proposals.</span>
+  </section>
+
+  <section class="dashboard-head">
+    <div>
+      <p class="eyebrow">Today</p>
+      <h1>Cloud noise, reduced to action.</h1>
+    </div>
+    <div class="actions">
+      {% if request.user.is_staff or request.user.is_superuser %}
+        <a class="button primary" href="{% url 'account_create' %}">Add AWS/GCP account</a>
+        <a class="button secondary" href="{% url 'settings' %}">Report language: {{ global_settings.get_report_language_display }}</a>
+      {% else %}
+        <span class="button secondary">Report language: {{ global_settings.get_report_language_display }}</span>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="metric-grid" aria-label="Today metrics">
+    <article class="metric danger">
+      <span>Critical</span>
+      <strong>{{ stats.critical }}</strong>
+    </article>
+    <article class="metric warning">
+      <span>Warning</span>
+      <strong>{{ stats.warnings }}</strong>
+    </article>
+    <article class="metric cost">
+      <span>Cost anomalies</span>
+      <strong>{{ stats.cost_findings }}</strong>
+    </article>
+    <article class="metric schedule">
+      <span>Failed schedules/logs</span>
+      <strong>{{ stats.failed_schedules }}</strong>
+    </article>
+    <article class="metric inventory">
+      <span>Resources</span>
+      <strong>{{ stats.resources }}</strong>
+    </article>
+  </section>
+
+  <section class="layout-two">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Cloud accounts</p>
+          <h2>Scan targets</h2>
+        </div>
+      </div>
+      <div class="account-list">
+        {% for account in accounts %}
+          <article class="account-row">
+            <div>
+              <strong>{{ account.name }}</strong>
+              <span>{{ account.get_provider_display }} / {{ account.account_ref }}</span>
+              <small>{{ account.regions|join:", " }}</small>
+            </div>
+            <div class="row-actions">
+              <a class="button small" href="{% url 'account_detail' account.id %}">Open</a>
+              <form method="post" action="{% url 'account_scan' account.id %}">
+                {% csrf_token %}
+                <button class="button small primary" type="submit">Scan</button>
+              </form>
+            </div>
+          </article>
+        {% empty %}
+          <div class="empty-state">
+            <strong>No cloud accounts yet.</strong>
+            {% if request.user.is_staff or request.user.is_superuser %}
+              <span>Add a read-only AWS key or GCP service account to start scanning schedules, logs, and cost signals.</span>
+            {% else %}
+              <span>Ask an admin to grant access to an AWS or GCP account.</span>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Daily briefing</p>
+          <h2>Evidence-backed summary</h2>
+        </div>
+        {% if request.user.is_staff or request.user.is_superuser %}
+          <form method="post" action="{% url 'briefing_create' %}">
+            {% csrf_token %}
+            <button class="button small secondary" type="submit">Regenerate</button>
+          </form>
+        {% endif %}
+      </div>
+      {% if latest_briefing %}
+        <div class="briefing-html">{{ latest_briefing.body_markdown|markdown }}</div>
+      {% else %}
+        <div class="empty-state">
+          <strong>No briefing yet.</strong>
+          <span>Run a scan to generate the first daily report.</span>
+        </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Open findings</p>
+        <h2>What needs attention</h2>
+      </div>
+      <form class="filters"
+            hx-get="{% url 'findings_table' %}"
+            hx-target="#findings-table"
+            hx-trigger="change, keyup delay:250ms from:input">
+        <input name="q" type="search" placeholder="Search findings">
+        <select name="severity">
+          <option value="">All severity</option>
+          <option value="critical">Critical</option>
+          <option value="warning">Warning</option>
+          <option value="info">Info</option>
+        </select>
+        <select name="category">
+          <option value="">All categories</option>
+          <option value="schedule">Schedule</option>
+          <option value="logs">Logs</option>
+          <option value="cost">Cost</option>
+        </select>
+      </form>
+    </div>
+    <div class="split-detail">
+      <div id="findings-table">
+        {% include "ops/partials/findings_table.html" with findings=latest_findings %}
+      </div>
+      <aside id="finding-detail" class="detail-pane">
+        <span class="muted">Select a finding for evidence and suggested action.</span>
+      </aside>
+    </div>
+  </section>
+{% endblock %}

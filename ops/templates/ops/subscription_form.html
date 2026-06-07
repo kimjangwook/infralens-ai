@@ -1,0 +1,29 @@
+{% extends "ops/base.html" %}
+{% block title %}Add subscription - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="narrow">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Notifications</p>
+          <h1>Add subscription</h1>
+        </div>
+      </div>
+      <form class="stack-form" method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+        {% for field in form %}
+          <label class="field checkbox-field">
+            <span>{{ field.label }}</span>
+            {{ field }}
+            {% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+        {% endfor %}
+        <div class="form-actions">
+          <button class="button primary" type="submit">Save subscription</button>
+          <a class="button secondary" href="{% url 'webhooks' %}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </section>
+{% endblock %}

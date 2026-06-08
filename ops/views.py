@@ -36,6 +36,7 @@ from .models import (
     NotificationSubscription,
     WebhookEndpoint,
 )
+from .ai import verify_ai_provider
 from .scanners import run_scan
 from .services import (
     account_stats,
@@ -132,10 +133,13 @@ def account_create(request: HttpRequest) -> HttpResponse:
     return render(request, "ops/account_form.html", {"form": form})
 
 
-@global_admin_required
+@product_login_required
 @require_http_methods(["GET", "POST"])
 def account_edit(request: HttpRequest, account_id) -> HttpResponse:
-    account = get_object_or_404(CloudAccount, id=account_id)
+    account = get_object_or_404(accessible_accounts(request.user), id=account_id)
+    if not has_account_role(request.user, account, AccountMembership.Role.ADMIN):
+        messages.error(request, "You need account admin access to edit this account.")
+        return redirect("account_detail", account_id=account.id)
     if request.method == "POST":
         form = CloudAccountForm(request.POST, instance=account)
         if form.is_valid():
@@ -151,10 +155,13 @@ def account_edit(request: HttpRequest, account_id) -> HttpResponse:
     )
 
 
-@global_admin_required
+@product_login_required
 @require_POST
 def account_delete(request: HttpRequest, account_id) -> HttpResponse:
-    account = get_object_or_404(CloudAccount, id=account_id)
+    account = get_object_or_404(accessible_accounts(request.user), id=account_id)
+    if not has_account_role(request.user, account, AccountMembership.Role.OWNER):
+        messages.error(request, "You need account owner access to delete this account.")
+        return redirect("account_detail", account_id=account.id)
     name = account.name
     account.delete()
     messages.success(request, f"{name} was deleted.")
@@ -235,6 +242,18 @@ def ai_provider_delete(request: HttpRequest, provider_id) -> HttpResponse:
     return redirect("settings")
 
 
+@global_admin_required
+@require_POST
+def ai_provider_test(request: HttpRequest, provider_id) -> HttpResponse:
+    provider = get_object_or_404(AIProvider, id=provider_id)
+    ok, message = verify_ai_provider(provider)
+    if ok:
+        messages.success(request, message)
+    else:
+        messages.error(request, f"{provider.name}: {message}")
+    return redirect("settings")
+
+
 @product_login_required
 @require_GET
 def account_detail(request: HttpRequest, account_id) -> HttpResponse:
@@ -250,6 +269,8 @@ def account_detail(request: HttpRequest, account_id) -> HttpResponse:
             "findings": account.findings.filter(status=Finding.Status.OPEN)[:40],
             "scan_runs": account.scan_runs.all()[:10],
             "briefing": account.briefings.first(),
+            "can_edit": has_account_role(request.user, account, AccountMembership.Role.ADMIN),
+            "can_delete": has_account_role(request.user, account, AccountMembership.Role.OWNER),
         },
     )
 

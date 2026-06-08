@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
+import requests
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from .crypto import decrypt_json, decrypt_text
+from . import ai as ai_module
+from .ai import (
+    _extract_anthropic_text,
+    _extract_google_text,
+    _extract_openai_text,
+    generate_ai_insight,
+    verify_ai_provider,
+)
+from .crypto import decrypt_json, decrypt_text, encrypt_text
 from .forms import AIProviderForm, CloudAccountForm, WebhookEndpointForm
 from .models import (
     AccountMembership,
@@ -276,6 +287,67 @@ class CloudAccountEditDeleteTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(CloudAccount.objects.filter(id=self.account.id).exists())
 
+    def _member(self, username, role):
+        user = get_user_model().objects.create_user(username=username, password="test-pass")
+        AccountMembership.objects.create(user=user, account=self.account, role=role)
+        return user
+
+    def test_account_admin_can_edit_without_global_admin(self):
+        admin = self._member("acct-admin", AccountMembership.Role.ADMIN)
+        self.client.force_login(admin)
+
+        response = self.client.post(
+            reverse("account_edit", args=[self.account.id]),
+            data={
+                "name": "Edited By Account Admin",
+                "provider": CloudAccount.Provider.AWS,
+                "aws_account_ref": "123456789012",
+                "aws_regions": ["ap-northeast-1"],
+                "aws_access_key_id": "",
+                "aws_secret_access_key": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.name, "Edited By Account Admin")
+
+    def test_account_admin_cannot_delete(self):
+        admin = self._member("acct-admin2", AccountMembership.Role.ADMIN)
+        self.client.force_login(admin)
+
+        response = self.client.post(reverse("account_delete", args=[self.account.id]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(CloudAccount.objects.filter(id=self.account.id).exists())
+
+    def test_account_owner_can_delete_without_global_admin(self):
+        owner = self._member("acct-owner", AccountMembership.Role.OWNER)
+        self.client.force_login(owner)
+
+        response = self.client.post(reverse("account_delete", args=[self.account.id]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(CloudAccount.objects.filter(id=self.account.id).exists())
+
+    def test_operator_cannot_edit(self):
+        operator = self._member("acct-op", AccountMembership.Role.OPERATOR)
+        self.client.force_login(operator)
+
+        response = self.client.post(
+            reverse("account_edit", args=[self.account.id]),
+            data={
+                "name": "Should Not Apply",
+                "provider": CloudAccount.Provider.AWS,
+                "aws_account_ref": "123456789012",
+                "aws_regions": ["ap-northeast-1"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.account.refresh_from_db()
+        self.assertNotEqual(self.account.name, "Should Not Apply")
+
 
 class AIProviderTests(TestCase):
     def setUp(self):
@@ -347,3 +419,151 @@ class AIProviderTests(TestCase):
 
         self.assertEqual(updated.model, "gpt-5.4")
         self.assertEqual(decrypt_text(updated.encrypted_api_key), "sk-original")
+
+
+def _fake_response(payload: dict, status: int = 200) -> MagicMock:
+    response = MagicMock()
+    response.status_code = status
+    response.json.return_value = payload
+    response.text = ""
+    if status >= 400:
+        err = requests.HTTPError(response=response)
+        response.raise_for_status.side_effect = err
+    else:
+        response.raise_for_status.return_value = None
+    return response
+
+
+class AIExtractTests(TestCase):
+    def test_openai_output_text(self):
+        self.assertEqual(_extract_openai_text({"output_text": "  hi  "}), "hi")
+
+    def test_openai_structured_output(self):
+        data = {"output": [{"content": [{"text": "a"}, {"text": "b"}]}]}
+        self.assertEqual(_extract_openai_text(data), "a\nb")
+
+    def test_anthropic_blocks(self):
+        data = {"content": [{"type": "text", "text": "claude says"}]}
+        self.assertEqual(_extract_anthropic_text(data), "claude says")
+
+    def test_google_candidates(self):
+        data = {"candidates": [{"content": {"parts": [{"text": "gemini says"}]}}]}
+        self.assertEqual(_extract_google_text(data), "gemini says")
+
+
+class AIDispatchTests(TestCase):
+    def setUp(self):
+        # Migration 0005 can seed a provider from a real OPENAI_API_KEY in the
+        # environment. Clear it so dispatch tests are deterministic and never
+        # make a live API call.
+        AIProvider.objects.all().delete()
+
+    def _provider(self, provider, model, key="sk-test-key-12345", **kwargs):
+        return AIProvider.objects.create(
+            name=f"{provider}-prov",
+            provider=provider,
+            model=model,
+            encrypted_api_key=encrypt_text(key),
+            is_active=True,
+            is_default=kwargs.get("is_default", True),
+        )
+
+    def test_openai_dispatch_uses_responses_api(self):
+        self._provider(AIProvider.Provider.OPENAI, "gpt-5.5")
+        with patch.object(ai_module.requests, "post", return_value=_fake_response({"output_text": "OK"})) as mock_post:
+            text, meta = generate_ai_insight(title_account="Acct", findings=[], report_language="en")
+
+        self.assertEqual(text, "OK")
+        self.assertEqual(meta["ai_status"], "generated")
+        url = mock_post.call_args.args[0]
+        headers = mock_post.call_args.kwargs["headers"]
+        self.assertIn("api.openai.com/v1/responses", url)
+        self.assertEqual(headers["Authorization"], "Bearer sk-test-key-12345")
+
+    def test_anthropic_dispatch_uses_messages_api(self):
+        self._provider(AIProvider.Provider.ANTHROPIC, "claude-opus-4-8")
+        with patch.object(ai_module.requests, "post", return_value=_fake_response({"content": [{"text": "OK"}]})) as mock_post:
+            text, meta = generate_ai_insight(title_account="Acct", findings=[], report_language="en")
+
+        self.assertEqual(text, "OK")
+        url = mock_post.call_args.args[0]
+        headers = mock_post.call_args.kwargs["headers"]
+        self.assertIn("api.anthropic.com/v1/messages", url)
+        self.assertEqual(headers["x-api-key"], "sk-test-key-12345")
+        self.assertIn("anthropic-version", headers)
+
+    def test_google_dispatch_uses_generatecontent(self):
+        self._provider(AIProvider.Provider.GOOGLE, "gemini-3.5-flash")
+        with patch.object(ai_module.requests, "post", return_value=_fake_response({"candidates": [{"content": {"parts": [{"text": "OK"}]}}]})) as mock_post:
+            text, meta = generate_ai_insight(title_account="Acct", findings=[], report_language="en")
+
+        self.assertEqual(text, "OK")
+        url = mock_post.call_args.args[0]
+        headers = mock_post.call_args.kwargs["headers"]
+        self.assertIn("models/gemini-3.5-flash:generateContent", url)
+        self.assertEqual(headers["x-goog-api-key"], "sk-test-key-12345")
+
+    @override_settings(AI_ENABLED=False)
+    def test_disabled_short_circuits(self):
+        self._provider(AIProvider.Provider.OPENAI, "gpt-5.5")
+        text, meta = generate_ai_insight(title_account="A", findings=[], report_language="en")
+        self.assertIsNone(text)
+        self.assertEqual(meta["ai_status"], "disabled")
+
+    def test_no_provider_configured(self):
+        text, meta = generate_ai_insight(title_account="A", findings=[], report_language="en")
+        self.assertIsNone(text)
+        self.assertEqual(meta["ai_status"], "no_provider")
+
+    def test_missing_api_key(self):
+        AIProvider.objects.create(
+            name="empty", provider=AIProvider.Provider.OPENAI, model="gpt-5.5",
+            encrypted_api_key="", is_active=True, is_default=True,
+        )
+        text, meta = generate_ai_insight(title_account="A", findings=[], report_language="en")
+        self.assertIsNone(text)
+        self.assertEqual(meta["ai_status"], "missing_api_key")
+
+    def test_request_failure_is_reported(self):
+        self._provider(AIProvider.Provider.OPENAI, "gpt-5.5")
+        with patch.object(ai_module.requests, "post", side_effect=requests.ConnectionError("boom")):
+            text, meta = generate_ai_insight(title_account="A", findings=[], report_language="en")
+        self.assertIsNone(text)
+        self.assertEqual(meta["ai_status"], "request_failed")
+
+
+class AIProviderVerifyTests(TestCase):
+    def setUp(self):
+        AIProvider.objects.all().delete()
+        self.user = get_user_model().objects.create_user(
+            username="admin", password="x", is_staff=True, is_superuser=True
+        )
+        self.client.force_login(self.user)
+        self.provider = AIProvider.objects.create(
+            name="OpenAI", provider=AIProvider.Provider.OPENAI, model="gpt-5.5",
+            encrypted_api_key=encrypt_text("sk-key"), is_active=True, is_default=True,
+        )
+
+    def test_verify_success(self):
+        with patch.object(ai_module.requests, "post", return_value=_fake_response({"output_text": "OK"})):
+            ok, message = verify_ai_provider(self.provider)
+        self.assertTrue(ok)
+        self.assertIn("OK", message)
+
+    def test_verify_http_error(self):
+        with patch.object(ai_module.requests, "post", return_value=_fake_response({}, status=401)):
+            ok, message = verify_ai_provider(self.provider)
+        self.assertFalse(ok)
+        self.assertIn("401", message)
+
+    def test_test_button_view_success(self):
+        with patch.object(ai_module.requests, "post", return_value=_fake_response({"output_text": "OK"})):
+            response = self.client.post(reverse("ai_provider_test", args=[self.provider.id]))
+        self.assertEqual(response.status_code, 302)
+
+    def test_test_button_view_requires_global_admin(self):
+        member = get_user_model().objects.create_user(username="plain", password="x")
+        self.client.force_login(member)
+        response = self.client.post(reverse("ai_provider_test", args=[self.provider.id]))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("dashboard"), response["Location"])

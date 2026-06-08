@@ -18,8 +18,10 @@
         <input type="hidden" name="account_id" value="{{ account.id }}">
         <button class="button secondary" type="submit">Generate briefing</button>
       </form>
-      {% if request.user.is_staff or request.user.is_superuser %}
+      {% if can_edit %}
         <a class="button secondary" href="{% url 'account_edit' account.id %}">Edit</a>
+      {% endif %}
+      {% if can_delete %}
         <form method="post" action="{% url 'account_delete' account.id %}"
               onsubmit="return confirm('Delete {{ account.name|escapejs }} and all its scans, findings, and briefings? This cannot be undone.');">
           {% csrf_token %}

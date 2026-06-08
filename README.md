@@ -155,8 +155,8 @@ Cloud account access is controlled per user.
 | --- | --- |
 | `viewer` | View findings, resources, schedules, and reports |
 | `operator` | Viewer plus scan and briefing generation |
-| `admin` | Operator plus account-level management |
-| `owner` | Full account ownership |
+| `admin` | Operator plus account-level management and editing the account |
+| `owner` | Full account ownership, including deleting the account |
 
 Global admins can create, edit, and delete cloud accounts, manage AI providers, manage users, and edit global settings.
 
@@ -193,7 +193,9 @@ This creates a demo AWS account, sample schedule, sample findings, and a briefin
 docker compose up --build
 ```
 
-For production, set a strong `DJANGO_SECRET_KEY`, set `DJANGO_DEBUG=false`, and put the app behind TLS.
+The container applies migrations on start and serves with gunicorn. WhiteNoise serves static files, so no separate static host is needed.
+
+For production, see the [deployment guide](docs/DEPLOYMENT.md): set a strong `DJANGO_SECRET_KEY`, set `DJANGO_DEBUG=false`, configure `DJANGO_ALLOWED_HOSTS`, and put the app behind TLS.
 
 ## Project Structure
 

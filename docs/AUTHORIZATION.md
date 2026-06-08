@@ -21,7 +21,7 @@ Global admins can:
 - Edit global settings
 - Access all cloud accounts
 
-Editing or deleting a cloud account, and all AI provider management, require global admin. Editing an account leaves the stored credentials in place unless new secret values are entered.
+Editing a cloud account requires the account `admin` role or a global admin. Deleting requires the account `owner` role or a global admin. Editing leaves the stored credentials in place unless new secret values are entered. AI provider management requires a global admin.
 
 ## Cloud account roles
 
@@ -31,8 +31,8 @@ Access is assigned through `AccountMembership`.
 | --- | --- |
 | viewer | View findings, resources, schedules, and reports |
 | operator | Run scans and generate briefings |
-| admin | Manage account-level settings and credentials |
-| owner | Full account ownership |
+| admin | Manage account-level settings and credentials, edit the account |
+| owner | Full account ownership, delete the account |
 
 ## Webhooks
 

@@ -19,6 +19,11 @@ urlpatterns = [
         views.ai_provider_delete,
         name="ai_provider_delete",
     ),
+    path(
+        "settings/ai-providers/<uuid:provider_id>/test/",
+        views.ai_provider_test,
+        name="ai_provider_test",
+    ),
     path("users/", views.user_list, name="users"),
     path("users/new/", views.user_create, name="user_create"),
     path("users/<int:user_id>/access/", views.user_access, name="user_access"),

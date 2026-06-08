@@ -73,6 +73,40 @@ def generate_ai_insight(
     return text, {"ai_status": "generated", **meta_base}
 
 
+def verify_ai_provider(provider: AIProvider) -> tuple[bool, str]:
+    """Send a minimal request to confirm the provider's key and model work.
+
+    Returns (ok, message). Used by the "Test connection" action so an operator
+    can confirm a newly added provider before a briefing depends on it.
+    """
+    api_key = decrypt_text(provider.encrypted_api_key)
+    if not api_key:
+        return False, "No API key is stored for this provider."
+
+    probe = "Reply with the single word OK."
+    try:
+        if provider.provider == AIProvider.Provider.OPENAI:
+            text = _call_openai(provider.model, api_key, probe)
+        elif provider.provider == AIProvider.Provider.ANTHROPIC:
+            text = _call_anthropic(provider.model, api_key, probe)
+        elif provider.provider == AIProvider.Provider.GOOGLE:
+            text = _call_google(provider.model, api_key, probe)
+        else:
+            return False, f"Unsupported provider: {provider.provider}"
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "?"
+        detail = ""
+        if exc.response is not None:
+            detail = exc.response.text[:200]
+        return False, f"HTTP {status} from {provider.get_provider_display()}. {detail}".strip()
+    except requests.RequestException as exc:
+        return False, f"Request failed: {str(exc)[:200]}"
+
+    if not text:
+        return False, "The provider returned an empty response."
+    return True, f"OK - {provider.get_provider_display()} responded with {provider.model}."
+
+
 def _call_openai(model: str, api_key: str, user_content: str) -> str:
     response = requests.post(
         "https://api.openai.com/v1/responses",

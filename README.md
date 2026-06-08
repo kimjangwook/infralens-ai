@@ -80,33 +80,33 @@ Copy `.env.example` to `.env`.
 Required for real use:
 
 - `DJANGO_SECRET_KEY`: encryption and Django signing key. Change this before production use.
-- `OPENAI_API_KEY`: used for AI briefing generation.
 
 Common optional values:
 
 - `DJANGO_DEBUG`: `true` for local development, `false` for production.
 - `DJANGO_ALLOWED_HOSTS`: comma-separated hostnames.
 - `INFRALENS_DB_PATH`: SQLite database path.
-- `OPENAI_MODEL`: default AI model value before it is changed in Settings.
+- `INFRALENS_AI_ENABLED`: set `false` to disable AI calls and always use the fallback briefing.
+- `OPENAI_API_KEY` / `OPENAI_MODEL`: legacy. Only read once by the upgrade migration to import a pre-existing single-key setup. New installs configure providers in the app.
 - `INFRALENS_STORE_RAW_LOGS`: reserved for future raw-log retention; keep `false`.
 
 ## AI Briefings
 
-InfraLens uses the OpenAI Responses API when `OPENAI_API_KEY` is configured.
+AI providers are configured in the app under **Settings -> AI providers**. You can register multiple providers, pick the provider and model for each, and mark one as the default used for briefings. API keys are encrypted at rest with the same key derivation used for cloud credentials.
 
-Default model:
+Supported providers:
 
-```text
-gpt-5.4-mini-2026-03-17
-```
+- OpenAI (Responses API)
+- Anthropic / Claude (Messages API)
+- Google / Gemini (generateContent API)
 
-The Settings screen lets an owner choose from multiple briefing models and choose the report language:
+Reports are generated in the language chosen in Settings:
 
 - English
 - Japanese
 - Korean
 
-If the OpenAI API is unavailable, InfraLens stores a deterministic fallback briefing in the same configured language.
+If no active provider is configured or the API call fails, InfraLens stores a deterministic fallback briefing in the same configured language.
 
 ## AWS Permissions
 

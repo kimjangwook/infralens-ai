@@ -5,9 +5,10 @@ from django.test import TestCase
 from django.urls import reverse
 
 from .crypto import decrypt_json, decrypt_text
-from .forms import CloudAccountForm, WebhookEndpointForm
+from .forms import AIProviderForm, CloudAccountForm, WebhookEndpointForm
 from .models import (
     AccountMembership,
+    AIProvider,
     CloudAccount,
     DailyBriefing,
     Finding,
@@ -147,7 +148,7 @@ class DashboardTests(TestCase):
         response = self.client.get(reverse("settings"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Language and AI")
+        self.assertContains(response, "AI providers")
 
     def test_korean_fallback_briefing_uses_configured_language(self):
         GlobalSettings.load()
@@ -201,3 +202,148 @@ class WebhookTests(TestCase):
 
         self.assertNotIn("hooks.example", endpoint.encrypted_url)
         self.assertEqual(decrypt_text(endpoint.encrypted_url), "https://hooks.example.test/services/abc")
+
+
+class CloudAccountEditDeleteTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="ops-admin",
+            password="test-pass",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_login(self.user)
+        self.account = seed_demo_data()
+
+    def test_edit_keeps_credentials_when_secret_blank(self):
+        original = self.account.encrypted_credentials
+        response = self.client.post(
+            reverse("account_edit", args=[self.account.id]),
+            data={
+                "name": "Renamed Prod",
+                "provider": CloudAccount.Provider.AWS,
+                "aws_account_ref": "123456789012",
+                "aws_regions": ["ap-northeast-1"],
+                "aws_access_key_id": "",
+                "aws_secret_access_key": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.name, "Renamed Prod")
+        self.assertEqual(self.account.regions, ["ap-northeast-1"])
+        # Untouched secret fields keep the stored credentials.
+        self.assertEqual(self.account.encrypted_credentials, original)
+
+    def test_edit_replaces_credentials_when_provided(self):
+        response = self.client.post(
+            reverse("account_edit", args=[self.account.id]),
+            data={
+                "name": "Demo AWS Production",
+                "provider": CloudAccount.Provider.AWS,
+                "aws_account_ref": "123456789012",
+                "aws_regions": ["ap-northeast-1", "us-east-1"],
+                "aws_access_key_id": "AKIANEWKEY1234567890",
+                "aws_secret_access_key": "rotated-secret",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.account.refresh_from_db()
+        self.assertEqual(
+            decrypt_json(self.account.encrypted_credentials)["aws_secret_access_key"],
+            "rotated-secret",
+        )
+
+    def test_delete_removes_account(self):
+        response = self.client.post(reverse("account_delete", args=[self.account.id]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(CloudAccount.objects.filter(id=self.account.id).exists())
+
+    def test_non_admin_cannot_delete(self):
+        member = get_user_model().objects.create_user(username="viewer", password="test-pass")
+        AccountMembership.objects.create(
+            user=member,
+            account=self.account,
+            role=AccountMembership.Role.OPERATOR,
+        )
+        self.client.force_login(member)
+
+        response = self.client.post(reverse("account_delete", args=[self.account.id]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(CloudAccount.objects.filter(id=self.account.id).exists())
+
+
+class AIProviderTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="ops-admin",
+            password="test-pass",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_login(self.user)
+
+    def test_api_key_is_encrypted(self):
+        form = AIProviderForm(
+            data={
+                "name": "Claude",
+                "provider": AIProvider.Provider.ANTHROPIC,
+                "model": "claude-opus-4-8",
+                "api_key": "sk-ant-secret-key-value",
+                "is_active": "on",
+                "is_default": "on",
+            }
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        provider = form.save()
+
+        self.assertNotIn("secret-key-value", provider.encrypted_api_key)
+        self.assertEqual(decrypt_text(provider.encrypted_api_key), "sk-ant-secret-key-value")
+        self.assertIn("...", provider.api_key_hint)
+
+    def test_only_one_default_provider(self):
+        first = AIProvider.objects.create(
+            name="OpenAI", provider="openai", model="gpt-5.4-mini", is_default=True
+        )
+        second = AIProvider.objects.create(
+            name="Gemini", provider="google", model="gemini-2.5-pro", is_default=True
+        )
+
+        first.refresh_from_db()
+        self.assertFalse(first.is_default)
+        self.assertTrue(second.is_default)
+        self.assertEqual(AIProvider.get_default().pk, second.pk)
+
+    def test_edit_keeps_key_when_blank(self):
+        provider = AIProviderForm(
+            data={
+                "name": "OpenAI",
+                "provider": "openai",
+                "model": "gpt-5.4-mini",
+                "api_key": "sk-original",
+                "is_active": "on",
+            }
+        )
+        self.assertTrue(provider.is_valid(), provider.errors)
+        saved = provider.save()
+
+        edit = AIProviderForm(
+            data={
+                "name": "OpenAI Prod",
+                "provider": "openai",
+                "model": "gpt-5.4",
+                "api_key": "",
+                "is_active": "on",
+            },
+            instance=saved,
+        )
+        self.assertTrue(edit.is_valid(), edit.errors)
+        updated = edit.save()
+
+        self.assertEqual(updated.model, "gpt-5.4")
+        self.assertEqual(decrypt_text(updated.encrypted_api_key), "sk-original")

@@ -6,7 +6,8 @@ from typing import Any
 import requests
 from django.conf import settings
 
-from .models import Finding, GlobalSettings
+from .crypto import decrypt_text
+from .models import AIProvider, Finding, GlobalSettings
 
 
 LANGUAGE_NAMES = {
@@ -15,25 +16,35 @@ LANGUAGE_NAMES = {
     GlobalSettings.ReportLanguage.KO: "Korean",
 }
 
+SYSTEM_PROMPT = (
+    "You are InfraLens AI, a cautious CloudOps analyst for small teams. "
+    "You create evidence-backed daily cloud operations briefings."
+)
+
 
 def generate_ai_insight(
     *,
     title_account: str,
     findings: list[Finding],
     report_language: str,
-    model: str,
+    provider: AIProvider | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
     if not settings.AI_ENABLED:
         return None, {"ai_status": "disabled"}
-    if not settings.OPENAI_API_KEY:
-        return None, {"ai_status": "missing_api_key"}
+    if provider is None:
+        provider = AIProvider.get_default()
+    if provider is None:
+        return None, {"ai_status": "no_provider"}
+
+    api_key = decrypt_text(provider.encrypted_api_key)
+    if not api_key:
+        return None, {"ai_status": "missing_api_key", "provider": provider.provider}
 
     language_name = LANGUAGE_NAMES.get(report_language, "English")
-    payload = _finding_payload(findings)
     prompt = {
         "account_scope": title_account,
         "language": language_name,
-        "findings": payload,
+        "findings": _finding_payload(findings),
         "rules": [
             "Write the entire report in the configured language.",
             "Use only the provided evidence. Do not invent cloud resources, causes, or metrics.",
@@ -42,45 +53,81 @@ def generate_ai_insight(
             "Include confidence for each major insight as high, medium, or low.",
         ],
     }
-    request_body = {
-        "model": model,
-        "input": [
-            {
-                "role": "system",
-                "content": (
-                    "You are InfraLens AI, a cautious CloudOps analyst for small teams. "
-                    "You create evidence-backed daily cloud operations briefings."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(prompt, ensure_ascii=False),
-            },
-        ],
-    }
-    try:
-        response = requests.post(
-            "https://api.openai.com/v1/responses",
-            headers={
-                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=request_body,
-            timeout=45,
-        )
-        response.raise_for_status()
-        data = response.json()
-    except requests.RequestException as exc:
-        return None, {
-            "ai_status": "request_failed",
-            "model": model,
-            "error": str(exc)[:500],
-        }
+    user_content = json.dumps(prompt, ensure_ascii=False)
 
-    text = _extract_response_text(data)
+    meta_base = {"provider": provider.provider, "model": provider.model}
+    try:
+        if provider.provider == AIProvider.Provider.OPENAI:
+            text = _call_openai(provider.model, api_key, user_content)
+        elif provider.provider == AIProvider.Provider.ANTHROPIC:
+            text = _call_anthropic(provider.model, api_key, user_content)
+        elif provider.provider == AIProvider.Provider.GOOGLE:
+            text = _call_google(provider.model, api_key, user_content)
+        else:
+            return None, {"ai_status": "unsupported_provider", **meta_base}
+    except requests.RequestException as exc:
+        return None, {"ai_status": "request_failed", "error": str(exc)[:500], **meta_base}
+
     if not text:
-        return None, {"ai_status": "empty_response", "model": model}
-    return text, {"ai_status": "generated", "model": model}
+        return None, {"ai_status": "empty_response", **meta_base}
+    return text, {"ai_status": "generated", **meta_base}
+
+
+def _call_openai(model: str, api_key: str, user_content: str) -> str:
+    response = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "input": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+        },
+        timeout=45,
+    )
+    response.raise_for_status()
+    return _extract_openai_text(response.json())
+
+
+def _call_anthropic(model: str, api_key: str, user_content: str) -> str:
+    response = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "max_tokens": 2048,
+            "system": SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": user_content}],
+        },
+        timeout=45,
+    )
+    response.raise_for_status()
+    return _extract_anthropic_text(response.json())
+
+
+def _call_google(model: str, api_key: str, user_content: str) -> str:
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    )
+    response = requests.post(
+        url,
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        json={
+            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": user_content}]}],
+        },
+        timeout=45,
+    )
+    response.raise_for_status()
+    return _extract_google_text(response.json())
 
 
 def _finding_payload(findings: list[Finding]) -> list[dict[str, Any]]:
@@ -101,7 +148,7 @@ def _finding_payload(findings: list[Finding]) -> list[dict[str, Any]]:
     return items
 
 
-def _extract_response_text(data: dict[str, Any]) -> str:
+def _extract_openai_text(data: dict[str, Any]) -> str:
     if isinstance(data.get("output_text"), str):
         return data["output_text"].strip()
     chunks: list[str] = []
@@ -111,3 +158,19 @@ def _extract_response_text(data: dict[str, Any]) -> str:
                 chunks.append(content["text"])
     return "\n".join(chunks).strip()
 
+
+def _extract_anthropic_text(data: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    for block in data.get("content", []):
+        if isinstance(block.get("text"), str):
+            chunks.append(block["text"])
+    return "\n".join(chunks).strip()
+
+
+def _extract_google_text(data: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    for candidate in data.get("candidates", []):
+        for part in candidate.get("content", {}).get("parts", []):
+            if isinstance(part.get("text"), str):
+                chunks.append(part["text"])
+    return "\n".join(chunks).strip()

@@ -241,7 +241,6 @@ class GlobalSettings(models.Model):
         choices=ReportLanguage.choices,
         default=ReportLanguage.EN,
     )
-    ai_model = models.CharField(max_length=120, default="gpt-5.4-mini-2026-03-17")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -255,6 +254,56 @@ class GlobalSettings(models.Model):
     def load(cls) -> "GlobalSettings":
         settings_obj, _ = cls.objects.get_or_create(pk=1)
         return settings_obj
+
+
+class AIProvider(models.Model):
+    """A configurable AI backend used to generate daily briefings.
+
+    Multiple providers can be stored. The one flagged ``is_default`` (and active)
+    is used for briefing generation. API keys are encrypted at rest.
+    """
+
+    class Provider(models.TextChoices):
+        OPENAI = "openai", "OpenAI"
+        ANTHROPIC = "anthropic", "Anthropic (Claude)"
+        GOOGLE = "google", "Google (Gemini)"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=120)
+    provider = models.CharField(max_length=24, choices=Provider.choices)
+    model = models.CharField(
+        max_length=120,
+        help_text="Model id, e.g. gpt-5.5, claude-opus-4-8, gemini-3.5-flash.",
+    )
+    encrypted_api_key = models.TextField(blank=True)
+    api_key_hint = models.CharField(max_length=120, blank=True)
+    is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-is_default", "name"]
+        verbose_name = "AI provider"
+        verbose_name_plural = "AI providers"
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.get_provider_display()})"
+
+    def save(self, *args, **kwargs) -> None:
+        super().save(*args, **kwargs)
+        # Keep a single default provider. Done after save so the new row exists.
+        if self.is_default:
+            AIProvider.objects.exclude(pk=self.pk).filter(is_default=True).update(
+                is_default=False
+            )
+
+    @classmethod
+    def get_default(cls) -> "AIProvider | None":
+        provider = cls.objects.filter(is_active=True, is_default=True).first()
+        if provider:
+            return provider
+        return cls.objects.filter(is_active=True).first()
 
 
 class WebhookEndpoint(models.Model):

@@ -1,18 +1,24 @@
 {% extends "ops/base.html" %}
-{% block title %}Add cloud account - InfraLens AI{% endblock %}
+{% block title %}{% if is_edit %}Edit cloud account{% else %}Add cloud account{% endif %} - InfraLens AI{% endblock %}
 {% block content %}
   <section class="narrow">
     <div class="panel">
       <div class="panel-head">
         <div>
           <p class="eyebrow">Read-only setup</p>
-          <h1>Add AWS or GCP account</h1>
+          <h1>{% if is_edit %}Edit {{ account.name }}{% else %}Add AWS or GCP account{% endif %}</h1>
         </div>
       </div>
       <form class="stack-form provider-form" method="post">
         {% csrf_token %}
         {% if form.non_field_errors %}
           <div class="form-errors">{{ form.non_field_errors }}</div>
+        {% endif %}
+        {% if is_edit %}
+          <div class="settings-note">
+            <strong>Updating credentials</strong>
+            <span>Leave the secret fields (AWS keys or GCP service account JSON) blank to keep the stored credentials. Fill them in only to replace.</span>
+          </div>
         {% endif %}
         <label class="field">
           <span>{{ form.name.label }}</span>
@@ -82,7 +88,11 @@
 
         <div class="form-actions">
           <button class="button primary" type="submit">Save encrypted credentials</button>
-          <a class="button secondary" href="{% url 'dashboard' %}">Cancel</a>
+          {% if is_edit %}
+            <a class="button secondary" href="{% url 'account_detail' account.id %}">Cancel</a>
+          {% else %}
+            <a class="button secondary" href="{% url 'dashboard' %}">Cancel</a>
+          {% endif %}
         </div>
       </form>
     </div>

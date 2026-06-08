@@ -14,6 +14,8 @@ from .authz import (
     users_exist,
 )
 from .forms import (
+    AI_MODEL_SUGGESTIONS,
+    AIProviderForm,
     CloudAccountForm,
     GlobalSettingsForm,
     NotificationSubscriptionForm,
@@ -25,6 +27,7 @@ from .forms import (
 )
 from .models import (
     AccountMembership,
+    AIProvider,
     CloudAccount,
     DailyBriefing,
     Finding,
@@ -130,6 +133,35 @@ def account_create(request: HttpRequest) -> HttpResponse:
 
 
 @global_admin_required
+@require_http_methods(["GET", "POST"])
+def account_edit(request: HttpRequest, account_id) -> HttpResponse:
+    account = get_object_or_404(CloudAccount, id=account_id)
+    if request.method == "POST":
+        form = CloudAccountForm(request.POST, instance=account)
+        if form.is_valid():
+            form.save()
+            messages.success(request, f"{account.name} was updated.")
+            return redirect("account_detail", account_id=account.id)
+    else:
+        form = CloudAccountForm(instance=account)
+    return render(
+        request,
+        "ops/account_form.html",
+        {"form": form, "account": account, "is_edit": True},
+    )
+
+
+@global_admin_required
+@require_POST
+def account_delete(request: HttpRequest, account_id) -> HttpResponse:
+    account = get_object_or_404(CloudAccount, id=account_id)
+    name = account.name
+    account.delete()
+    messages.success(request, f"{name} was deleted.")
+    return redirect("dashboard")
+
+
+@global_admin_required
 def settings_view(request: HttpRequest) -> HttpResponse:
     settings_obj = GlobalSettings.load()
     if request.method == "POST":
@@ -140,7 +172,67 @@ def settings_view(request: HttpRequest) -> HttpResponse:
             return redirect("settings")
     else:
         form = GlobalSettingsForm(instance=settings_obj)
-    return render(request, "ops/settings.html", {"form": form, "settings_obj": settings_obj})
+    return render(
+        request,
+        "ops/settings.html",
+        {
+            "form": form,
+            "settings_obj": settings_obj,
+            "ai_providers": AIProvider.objects.all(),
+        },
+    )
+
+
+@global_admin_required
+@require_http_methods(["GET", "POST"])
+def ai_provider_create(request: HttpRequest) -> HttpResponse:
+    if request.method == "POST":
+        form = AIProviderForm(request.POST)
+        if form.is_valid():
+            provider = form.save()
+            messages.success(request, f"AI provider {provider.name} was added.")
+            return redirect("settings")
+    else:
+        form = AIProviderForm()
+    return render(
+        request,
+        "ops/ai_provider_form.html",
+        {"form": form, "is_edit": False, "model_suggestions": AI_MODEL_SUGGESTIONS},
+    )
+
+
+@global_admin_required
+@require_http_methods(["GET", "POST"])
+def ai_provider_edit(request: HttpRequest, provider_id) -> HttpResponse:
+    provider = get_object_or_404(AIProvider, id=provider_id)
+    if request.method == "POST":
+        form = AIProviderForm(request.POST, instance=provider)
+        if form.is_valid():
+            form.save()
+            messages.success(request, f"AI provider {provider.name} was updated.")
+            return redirect("settings")
+    else:
+        form = AIProviderForm(instance=provider)
+    return render(
+        request,
+        "ops/ai_provider_form.html",
+        {
+            "form": form,
+            "is_edit": True,
+            "provider": provider,
+            "model_suggestions": AI_MODEL_SUGGESTIONS,
+        },
+    )
+
+
+@global_admin_required
+@require_POST
+def ai_provider_delete(request: HttpRequest, provider_id) -> HttpResponse:
+    provider = get_object_or_404(AIProvider, id=provider_id)
+    name = provider.name
+    provider.delete()
+    messages.success(request, f"AI provider {name} was deleted.")
+    return redirect("settings")
 
 
 @product_login_required

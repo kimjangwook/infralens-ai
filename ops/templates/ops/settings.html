@@ -6,7 +6,7 @@
       <div class="panel-head">
         <div>
           <p class="eyebrow">Global settings</p>
-          <h1>Language and AI</h1>
+          <h1>Report language</h1>
         </div>
       </div>
       <form class="stack-form" method="post">
@@ -21,15 +21,52 @@
             {% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}
           </label>
         {% endfor %}
-        <div class="settings-note">
-          <strong>AI insight model</strong>
-          <span>Briefings use the OpenAI API key from the local `.env` file. Reports are generated in the selected language.</span>
-        </div>
         <div class="form-actions">
           <button class="button primary" type="submit">Save settings</button>
           <a class="button secondary" href="{% url 'dashboard' %}">Back</a>
         </div>
       </form>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">AI providers</p>
+          <h2>Briefing models</h2>
+        </div>
+        <a class="button primary small" href="{% url 'ai_provider_create' %}">Add provider</a>
+      </div>
+      <div class="settings-note">
+        <strong>Multiple providers</strong>
+        <span>Configure OpenAI, Anthropic, or Google models. API keys are encrypted at rest. The provider marked as default (and active) is used for briefings.</span>
+      </div>
+      <div class="compact-list">
+        {% for provider in ai_providers %}
+          <div class="provider-row">
+            <div>
+              <strong>{{ provider.name }}</strong>
+              <span>
+                {{ provider.get_provider_display }} / {{ provider.model }}
+                {% if provider.api_key_hint %}/ key {{ provider.api_key_hint }}{% endif %}
+              </span>
+              <span class="badges">
+                {% if provider.is_default %}<em class="badge badge-default">Default</em>{% endif %}
+                {% if provider.is_active %}<em class="badge">Active</em>{% else %}<em class="badge badge-muted">Inactive</em>{% endif %}
+              </span>
+            </div>
+            <div class="actions">
+              <a class="button secondary small" href="{% url 'ai_provider_edit' provider.id %}">Edit</a>
+              <form method="post" action="{% url 'ai_provider_delete' provider.id %}"
+                    onsubmit="return confirm('Delete AI provider {{ provider.name|escapejs }}?');">
+                {% csrf_token %}
+                <button class="button danger small" type="submit">Delete</button>
+              </form>
+            </div>
+          </div>
+        {% empty %}
+          <div class="empty-state"><strong>No AI providers configured yet.</strong><span>Briefings fall back to a deterministic summary until you add one.</span></div>
+        {% endfor %}
+      </div>
     </div>
   </section>
 {% endblock %}

@@ -137,7 +137,6 @@ def generate_daily_briefing(
             title_account=title_account,
             findings=ordered,
             report_language=global_settings.report_language,
-            model=global_settings.ai_model,
         )
     if body is None:
         body = _fallback_briefing(

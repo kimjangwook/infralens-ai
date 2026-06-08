@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from .models import (
     AccountMembership,
+    AIProvider,
     CloudAccount,
     DailyBriefing,
     Finding,
@@ -66,7 +67,15 @@ class DailyBriefingAdmin(admin.ModelAdmin):
 
 @admin.register(GlobalSettings)
 class GlobalSettingsAdmin(admin.ModelAdmin):
-    list_display = ("report_language", "ai_model", "updated_at")
+    list_display = ("report_language", "updated_at")
+
+
+@admin.register(AIProvider)
+class AIProviderAdmin(admin.ModelAdmin):
+    list_display = ("name", "provider", "model", "is_default", "is_active", "updated_at")
+    list_filter = ("provider", "is_active", "is_default")
+    search_fields = ("name", "model")
+    readonly_fields = ("encrypted_api_key", "api_key_hint", "created_at", "updated_at")
 
 
 @admin.register(WebhookEndpoint)

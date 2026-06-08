@@ -102,8 +102,10 @@ RAW_LOG_RETENTION_ENABLED = os.getenv("INFRALENS_STORE_RAW_LOGS", "false").lower
     "on",
 }
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini-2026-03-17")
+# AI provider credentials are configured in the app (Settings -> AI providers)
+# and stored encrypted in the database. OPENAI_API_KEY / OPENAI_MODEL are only
+# read once, by the 0005 migration, to carry forward a pre-existing single-key
+# setup on upgrade.
 AI_ENABLED = os.getenv("INFRALENS_AI_ENABLED", "true").lower() in {
     "1",
     "true",

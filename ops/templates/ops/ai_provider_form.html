@@ -1,0 +1,63 @@
+{% extends "ops/base.html" %}
+{% block title %}{% if is_edit %}Edit AI provider{% else %}Add AI provider{% endif %} - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="narrow">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">AI providers</p>
+          <h1>{% if is_edit %}Edit {{ provider.name }}{% else %}Add AI provider{% endif %}</h1>
+        </div>
+      </div>
+      <form class="stack-form ai-provider-form" method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+          <div class="form-errors">{{ form.non_field_errors }}</div>
+        {% endif %}
+
+        {% for prov, models in model_suggestions.items %}
+          <datalist id="models-{{ prov }}">
+            {% for model in models %}<option value="{{ model }}"></option>{% endfor %}
+          </datalist>
+        {% endfor %}
+
+        <label class="field">
+          <span>{{ form.name.label }}</span>
+          {{ form.name }}
+          {% for error in form.name.errors %}<small class="error">{{ error }}</small>{% endfor %}
+        </label>
+        <label class="field">
+          <span>{{ form.provider.label }}</span>
+          {{ form.provider }}
+          {% for error in form.provider.errors %}<small class="error">{{ error }}</small>{% endfor %}
+        </label>
+        <label class="field">
+          <span>{{ form.model.label }}</span>
+          {{ form.model }}
+          {% if form.model.help_text %}<small>{{ form.model.help_text }}</small>{% endif %}
+          {% for error in form.model.errors %}<small class="error">{{ error }}</small>{% endfor %}
+        </label>
+        <label class="field">
+          <span>{{ form.api_key.label }}</span>
+          {{ form.api_key }}
+          {% if form.api_key.help_text %}<small>{{ form.api_key.help_text }}</small>{% endif %}
+          {% if is_edit and provider.api_key_hint %}<small>Current key: {{ provider.api_key_hint }}</small>{% endif %}
+          {% for error in form.api_key.errors %}<small class="error">{{ error }}</small>{% endfor %}
+        </label>
+        <label class="field checkbox">
+          {{ form.is_active }}
+          <span>{{ form.is_active.label }}</span>
+        </label>
+        <label class="field checkbox">
+          {{ form.is_default }}
+          <span>{{ form.is_default.label }} (used for briefings)</span>
+        </label>
+
+        <div class="form-actions">
+          <button class="button primary" type="submit">Save provider</button>
+          <a class="button secondary" href="{% url 'settings' %}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </section>
+{% endblock %}

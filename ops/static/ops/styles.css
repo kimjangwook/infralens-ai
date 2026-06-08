@@ -228,6 +228,17 @@ textarea {
   font-size: 0.88rem;
 }
 
+.button.danger {
+  border-color: #c0392b;
+  background: #fff;
+  color: #c0392b;
+}
+
+.button.danger:hover {
+  background: #c0392b;
+  color: #fff;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -654,6 +665,60 @@ textarea {
 .timeline-row span {
   color: var(--blue);
   font-weight: 800;
+}
+
+.provider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.provider-row > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.provider-row .badges {
+  display: inline-flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.provider-row .actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings .badge,
+.provider-row .badge {
+  background: #eef0e8;
+  color: var(--ink);
+}
+
+.badge.badge-default {
+  background: var(--green-2);
+  color: var(--green);
+}
+
+.badge.badge-muted {
+  background: #f1f1f1;
+  color: var(--muted);
+}
+
+.field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.field.checkbox input[type="checkbox"] {
+  width: auto;
+  min-height: auto;
 }
 
 .timeline-row em,

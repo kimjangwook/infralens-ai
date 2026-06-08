@@ -35,6 +35,16 @@ def decrypt_text(token: str) -> str:
     return _fernet().decrypt(token.encode("utf-8")).decode("utf-8")
 
 
+def secret_hint(value: str) -> str:
+    """Return a masked hint for a secret such as an API key."""
+    value = value.strip()
+    if len(value) >= 8:
+        return f"{value[:4]}...{value[-4:]}"
+    if value:
+        return "****"
+    return ""
+
+
 def credential_hint(provider: str, payload: dict) -> str:
     if provider == "aws":
         key = payload.get("aws_access_key_id", "")

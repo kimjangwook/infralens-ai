@@ -4,7 +4,8 @@ InfraLens handles cloud credentials, so the default posture is conservative.
 
 ## Defaults
 
-- Credentials are encrypted at rest with a key derived from `DJANGO_SECRET_KEY`.
+- Secrets are encrypted at rest with a Fernet key derived from `DJANGO_SECRET_KEY`. This covers cloud credentials (AWS keys, GCP service account JSON), AI provider API keys, and webhook URLs.
+- Plaintext secrets are never returned to the UI. Edit forms accept new values but leave the stored secret untouched when their fields are blank.
 - Scanners request read-only data.
 - Findings store summaries and samples, not full raw logs.
 - Remediation is never executed automatically.

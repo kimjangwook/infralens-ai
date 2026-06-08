@@ -158,7 +158,7 @@ Cloud account access is controlled per user.
 | `admin` | Operator plus account-level management |
 | `owner` | Full account ownership |
 
-Global admins can create cloud accounts, manage users, and edit global settings.
+Global admins can create, edit, and delete cloud accounts, manage AI providers, manage users, and edit global settings.
 
 ## Webhook Notifications
 

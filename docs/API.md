@@ -44,7 +44,7 @@ used for briefings. The form suggests current models per provider, for example:
 ```text
 OpenAI     gpt-5.5
 Anthropic  claude-opus-4-8
-Google     gemini-3.5-flash
+Google     gemini-3.1-pro-preview
 ```
 
 Any model id can be entered; the suggestions are a convenience, not a fixed list.

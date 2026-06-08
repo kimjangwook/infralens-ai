@@ -15,10 +15,13 @@ After that, `/setup/` closes automatically.
 
 Global admins can:
 
-- Create cloud accounts
+- Create, edit, and delete cloud accounts
+- Manage AI providers (provider, model, and encrypted API key)
 - Manage users
 - Edit global settings
 - Access all cloud accounts
+
+Editing or deleting a cloud account, and all AI provider management, require global admin. Editing an account leaves the stored credentials in place unless new secret values are entered.
 
 ## Cloud account roles
 

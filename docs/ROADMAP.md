@@ -8,7 +8,7 @@
 - Log and cost findings
 - Daily evidence-backed briefing
 - Global English/Japanese/Korean report language
-- OpenAI-based insights with same-language fallback
+- Multi-provider AI insights (OpenAI, Anthropic, Google) with same-language fallback
 - First-run owner setup
 - Per-user cloud account RBAC
 - User-owned webhook endpoints and subscriptions

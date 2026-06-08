@@ -12,10 +12,12 @@ InfraLens is not a Datadog, Wiz, CloudQuery, or Steampipe replacement. It is a b
 - Scans GCP Cloud Scheduler, Cloud Run, and Cloud Logging
 - Detects schedule, log, and cost findings with evidence
 - Generates AI daily briefings in English, Japanese, or Korean
+- Supports multiple AI providers (OpenAI, Anthropic, Google) with per-provider model selection
 - Renders briefings as Markdown, not raw code blocks
 - Supports first-run owner setup, login, users, and per-cloud-account RBAC
+- Lets admins add, edit, and delete cloud accounts without re-entering stored credentials
 - Sends scan findings to user-owned webhook subscriptions
-- Stores cloud credentials and webhook URLs encrypted at rest
+- Stores cloud credentials, AI API keys, and webhook URLs encrypted at rest
 
 ## Current MVP Scope
 

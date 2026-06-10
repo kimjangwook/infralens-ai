@@ -9,8 +9,10 @@ from .models import (
     GlobalSettings,
     NotificationDelivery,
     NotificationSubscription,
+    RemediationProposal,
     Resource,
     ScanRun,
+    ScanSchedule,
     Schedule,
     WebhookEndpoint,
 )
@@ -90,6 +92,20 @@ class WebhookEndpointAdmin(admin.ModelAdmin):
 class NotificationSubscriptionAdmin(admin.ModelAdmin):
     list_display = ("endpoint", "account", "min_severity", "enabled", "updated_at")
     list_filter = ("min_severity", "enabled")
+
+
+@admin.register(ScanSchedule)
+class ScanScheduleAdmin(admin.ModelAdmin):
+    list_display = ("account", "enabled", "interval_minutes", "next_run_at", "last_run_at", "last_status")
+    list_filter = ("enabled", "interval_minutes")
+    search_fields = ("account__name",)
+
+
+@admin.register(RemediationProposal)
+class RemediationProposalAdmin(admin.ModelAdmin):
+    list_display = ("finding", "status", "requested_by", "created_at")
+    list_filter = ("status",)
+    search_fields = ("finding__title",)
 
 
 @admin.register(NotificationDelivery)

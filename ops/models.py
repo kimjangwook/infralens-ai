@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import secrets
 import uuid
+from datetime import timedelta
 
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
+
+
+def generate_webhook_token() -> str:
+    return secrets.token_urlsafe(24)
 
 
 class CloudAccount(models.Model):
@@ -23,6 +29,11 @@ class CloudAccount(models.Model):
     regions = models.JSONField(default=list, blank=True)
     encrypted_credentials = models.TextField(blank=True)
     credentials_hint = models.CharField(max_length=160, blank=True)
+    webhook_token = models.CharField(
+        max_length=64,
+        default=generate_webhook_token,
+        help_text="Shared secret for the inbound scan trigger webhook.",
+    )
     last_scan_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -32,6 +43,11 @@ class CloudAccount(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.get_provider_display()})"
+
+    def regenerate_webhook_token(self) -> str:
+        self.webhook_token = generate_webhook_token()
+        self.save(update_fields=["webhook_token", "updated_at"])
+        return self.webhook_token
 
 
 class AccountMembership(models.Model):
@@ -114,6 +130,57 @@ class ScanRun(models.Model):
         self.finished_at = timezone.now()
         self.error_message = message[:4000]
         self.save(update_fields=["status", "finished_at", "error_message"])
+
+
+class ScanSchedule(models.Model):
+    """In-app recurring scan plan for one cloud account.
+
+    The ``run_scheduler`` management command (run from cron, a systemd timer,
+    or the docker-compose ``scheduler`` service) executes every schedule whose
+    ``next_run_at`` is due, then advances it by ``interval_minutes``.
+    """
+
+    class Interval(models.IntegerChoices):
+        HOURLY = 60, "Every hour"
+        EVERY_6_HOURS = 360, "Every 6 hours"
+        EVERY_12_HOURS = 720, "Every 12 hours"
+        DAILY = 1440, "Every day"
+        WEEKLY = 10080, "Every week"
+
+    account = models.OneToOneField(
+        CloudAccount,
+        on_delete=models.CASCADE,
+        related_name="scan_schedule",
+    )
+    enabled = models.BooleanField(default=True)
+    interval_minutes = models.PositiveIntegerField(
+        choices=Interval.choices,
+        default=Interval.DAILY,
+    )
+    next_run_at = models.DateTimeField(null=True, blank=True)
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    last_status = models.CharField(max_length=16, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["account__name"]
+
+    def __str__(self) -> str:
+        return f"{self.account} every {self.interval_minutes}m"
+
+    def is_due(self, now=None) -> bool:
+        if not self.enabled:
+            return False
+        now = now or timezone.now()
+        return self.next_run_at is None or self.next_run_at <= now
+
+    def mark_ran(self, status: str, now=None) -> None:
+        now = now or timezone.now()
+        self.last_run_at = now
+        self.last_status = status[:16]
+        self.next_run_at = now + timedelta(minutes=self.interval_minutes)
+        self.save(update_fields=["last_run_at", "last_status", "next_run_at", "updated_at"])
 
 
 class Resource(models.Model):
@@ -207,6 +274,43 @@ class Finding(models.Model):
 
     def __str__(self) -> str:
         return self.title
+
+
+class RemediationProposal(models.Model):
+    """An AI-drafted fix proposal for one finding.
+
+    Proposals are text only. InfraLens never applies changes to cloud
+    resources; an operator reviews the proposal and acts manually.
+    """
+
+    class Status(models.TextChoices):
+        GENERATED = "generated", "AI generated"
+        FALLBACK = "fallback", "Template fallback"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    finding = models.ForeignKey(
+        Finding,
+        on_delete=models.CASCADE,
+        related_name="proposals",
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="remediation_proposals",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices)
+    body_markdown = models.TextField(blank=True)
+    ai_meta = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Proposal for {self.finding}"
 
 
 class DailyBriefing(models.Model):

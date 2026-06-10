@@ -4,6 +4,10 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model, login, logout
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils import timezone
+from django.utils.crypto import constant_time_compare
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
 from .authz import (
@@ -21,6 +25,7 @@ from .forms import (
     NotificationSubscriptionForm,
     ProductLoginForm,
     ProductUserCreationForm,
+    ScanScheduleForm,
     SetupForm,
     UserAccessForm,
     WebhookEndpointForm,
@@ -34,19 +39,21 @@ from .models import (
     GlobalSettings,
     NotificationDelivery,
     NotificationSubscription,
+    ScanSchedule,
     WebhookEndpoint,
 )
 from .ai import verify_ai_provider
-from .scanners import run_scan
 from .services import (
     account_stats,
+    create_remediation_proposal,
     dashboard_stats,
-    dispatch_scan_notifications,
     finding_summary_by_category,
     generate_daily_briefing,
     get_global_settings,
+    run_scan_pipeline,
     seed_demo_data,
 )
+from .topology import build_topology, render_mermaid, topology_insights
 
 
 @require_http_methods(["GET", "POST"])
@@ -258,6 +265,11 @@ def ai_provider_test(request: HttpRequest, provider_id) -> HttpResponse:
 @require_GET
 def account_detail(request: HttpRequest, account_id) -> HttpResponse:
     account = get_object_or_404(accessible_accounts(request.user), id=account_id)
+    can_edit = has_account_role(request.user, account, AccountMembership.Role.ADMIN)
+    scan_schedule = ScanSchedule.objects.filter(account=account).first()
+    trigger_url = request.build_absolute_uri(
+        reverse("webhook_scan_trigger", args=[account.id, account.webhook_token])
+    )
     return render(
         request,
         "ops/account_detail.html",
@@ -269,8 +281,11 @@ def account_detail(request: HttpRequest, account_id) -> HttpResponse:
             "findings": account.findings.filter(status=Finding.Status.OPEN)[:40],
             "scan_runs": account.scan_runs.all()[:10],
             "briefing": account.briefings.first(),
-            "can_edit": has_account_role(request.user, account, AccountMembership.Role.ADMIN),
+            "can_edit": can_edit,
             "can_delete": has_account_role(request.user, account, AccountMembership.Role.OWNER),
+            "scan_schedule": scan_schedule,
+            "schedule_form": ScanScheduleForm(instance=scan_schedule),
+            "trigger_url": trigger_url if can_edit else "",
         },
     )
 
@@ -282,14 +297,118 @@ def account_scan(request: HttpRequest, account_id) -> HttpResponse:
     if not has_account_role(request.user, account, AccountMembership.Role.OPERATOR):
         messages.error(request, "You need operator access to run scans.")
         return redirect("account_detail", account_id=account.id)
-    scan_run = run_scan(account)
+    scan_run = run_scan_pipeline(account)
     if scan_run.status == scan_run.Status.SUCCESS:
-        generate_daily_briefing(account)
-        dispatch_scan_notifications(scan_run)
         messages.success(request, f"Scan finished for {account.name}.")
     else:
         messages.error(request, f"Scan failed for {account.name}: {scan_run.error_message}")
     return redirect("account_detail", account_id=account.id)
+
+
+@product_login_required
+@require_GET
+def topology_view(request: HttpRequest, account_id=None) -> HttpResponse:
+    accounts = accessible_accounts(request.user)
+    account = None
+    if account_id:
+        account = get_object_or_404(accounts, id=account_id)
+        accounts = accounts.filter(id=account.id)
+    graph = build_topology(accounts)
+    return render(
+        request,
+        "ops/topology.html",
+        {
+            "account": account,
+            "accounts": accessible_accounts(request.user),
+            "graph": graph,
+            "mermaid_source": render_mermaid(graph),
+            "insights": topology_insights(graph),
+        },
+    )
+
+
+@product_login_required
+@require_POST
+def account_schedule_update(request: HttpRequest, account_id) -> HttpResponse:
+    account = get_object_or_404(accessible_accounts(request.user), id=account_id)
+    if not has_account_role(request.user, account, AccountMembership.Role.ADMIN):
+        messages.error(request, "You need account admin access to change the scan schedule.")
+        return redirect("account_detail", account_id=account.id)
+    schedule, _ = ScanSchedule.objects.get_or_create(account=account)
+    form = ScanScheduleForm(request.POST, instance=schedule)
+    if form.is_valid():
+        schedule = form.save(commit=False)
+        # A newly enabled or re-tuned schedule becomes due immediately; the
+        # scheduler advances it by the interval after each run.
+        if schedule.enabled:
+            schedule.next_run_at = timezone.now()
+        schedule.save()
+        messages.success(request, f"Scan schedule updated for {account.name}.")
+    else:
+        messages.error(request, "Could not save the scan schedule.")
+    return redirect("account_detail", account_id=account.id)
+
+
+@product_login_required
+@require_POST
+def account_token_regenerate(request: HttpRequest, account_id) -> HttpResponse:
+    account = get_object_or_404(accessible_accounts(request.user), id=account_id)
+    if not has_account_role(request.user, account, AccountMembership.Role.ADMIN):
+        messages.error(request, "You need account admin access to rotate the webhook token.")
+        return redirect("account_detail", account_id=account.id)
+    account.regenerate_webhook_token()
+    messages.success(request, "Webhook trigger URL was rotated. Update any callers.")
+    return redirect("account_detail", account_id=account.id)
+
+
+@csrf_exempt
+@require_POST
+def webhook_scan_trigger(request: HttpRequest, account_id, token: str) -> JsonResponse:
+    """Inbound webhook: lets CI/CD or external cron trigger a scan remotely.
+
+    Authenticated by the per-account token in the URL path, not by a session,
+    so it is safe to call from headless systems.
+    """
+    try:
+        account = CloudAccount.objects.get(id=account_id)
+    except CloudAccount.DoesNotExist:
+        return JsonResponse({"error": "unknown account"}, status=404)
+    if not constant_time_compare(token, account.webhook_token):
+        return JsonResponse({"error": "invalid token"}, status=403)
+
+    scan_run = run_scan_pipeline(account)
+    payload = {
+        "scan_run": str(scan_run.id),
+        "status": scan_run.status,
+        "summary": scan_run.summary,
+    }
+    if scan_run.status == scan_run.Status.FAILED:
+        payload["error"] = scan_run.error_message
+        return JsonResponse(payload, status=502)
+    return JsonResponse(payload)
+
+
+@product_login_required
+@require_POST
+def finding_propose_fix(request: HttpRequest, finding_id) -> HttpResponse:
+    finding = get_object_or_404(
+        Finding.objects.select_related("account").filter(
+            account__in=accessible_accounts(request.user)
+        ),
+        id=finding_id,
+    )
+    if not has_account_role(request.user, finding.account, AccountMembership.Role.OPERATOR):
+        messages.error(request, "You need operator access to request fix proposals.")
+        return redirect("finding_detail", finding_id=finding.id)
+    proposal = create_remediation_proposal(finding, requested_by=request.user)
+    if proposal.status == proposal.Status.GENERATED:
+        messages.success(request, "AI fix proposal generated.")
+    else:
+        messages.info(
+            request,
+            "AI was unavailable; a template proposal was generated from the evidence.",
+        )
+    return redirect("finding_detail", finding_id=finding.id)
 
 
 @product_login_required
@@ -341,7 +460,17 @@ def finding_detail(request: HttpRequest, finding_id) -> HttpResponse:
         id=finding_id,
     )
     template = "ops/partials/finding_detail.html" if request.headers.get("HX-Request") else "ops/finding_detail.html"
-    return render(request, template, {"finding": finding})
+    return render(
+        request,
+        template,
+        {
+            "finding": finding,
+            "proposals": finding.proposals.select_related("requested_by")[:5],
+            "can_propose": has_account_role(
+                request.user, finding.account, AccountMembership.Role.OPERATOR
+            ),
+        },
+    )
 
 
 @global_admin_required

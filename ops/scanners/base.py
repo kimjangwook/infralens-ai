@@ -25,6 +25,9 @@ def run_scan(account: CloudAccount) -> ScanRun:
         scan_run.mark_failed(str(exc))
         return scan_run
 
+    from ops.topology import analyze_topology
+
+    summary["topology_findings"] = analyze_topology(account, scan_run)
     summary["finished_at"] = timezone.now().isoformat()
     scan_run.mark_success(summary)
     return scan_run

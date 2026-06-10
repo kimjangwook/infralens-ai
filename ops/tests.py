@@ -567,3 +567,361 @@ class AIProviderVerifyTests(TestCase):
         response = self.client.post(reverse("ai_provider_test", args=[self.provider.id]))
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("dashboard"), response["Location"])
+
+
+class TopologyTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+
+    def test_schedule_edge_matches_resource_by_provider_id(self):
+        from .topology import build_topology, render_mermaid
+
+        graph = build_topology([self.account])
+
+        self.assertGreaterEqual(len(graph.edges), 1)
+        mermaid = render_mermaid(graph)
+        self.assertIn("flowchart LR", mermaid)
+        self.assertIn("daily-export", mermaid)
+
+    def test_orphan_schedule_detected(self):
+        from .models import Schedule
+        from .topology import build_topology
+
+        Schedule.objects.create(
+            account=self.account,
+            provider_id="arn:aws:events:us-east-1:123456789012:rule/ghost",
+            name="ghost-rule",
+            target_type="aws.lambda",
+            target_ref="arn:aws:lambda:us-east-1:123456789012:function:missing",
+        )
+
+        graph = build_topology([self.account])
+
+        self.assertEqual(len(graph.orphan_schedules), 1)
+        self.assertEqual(graph.orphan_schedules[0].name, "ghost-rule")
+
+    def test_untriggered_resource_detected(self):
+        from .models import Resource
+        from .topology import build_topology
+
+        Resource.objects.create(
+            account=self.account,
+            provider_id="arn:aws:lambda:ap-northeast-1:123456789012:function:idle",
+            resource_type="aws.lambda",
+            name="idle",
+        )
+
+        graph = build_topology([self.account])
+
+        self.assertIn("idle", [resource.name for resource in graph.untriggered_resources])
+
+    def test_hotspot_detected(self):
+        from .models import Schedule
+        from .topology import build_topology
+
+        target = "arn:aws:lambda:ap-northeast-1:123456789012:function:daily-export"
+        for index in range(2):
+            Schedule.objects.create(
+                account=self.account,
+                provider_id=f"arn:aws:events:ap-northeast-1:123456789012:rule/extra-{index}",
+                name=f"extra-{index}",
+                target_type="aws.lambda",
+                target_ref=target,
+            )
+
+        graph = build_topology([self.account])
+
+        self.assertEqual(len(graph.hotspots), 1)
+        self.assertEqual(graph.hotspots[0][1], 3)
+
+    def test_analyze_topology_creates_findings(self):
+        from .models import Schedule, ScanRun
+        from .topology import analyze_topology
+
+        Schedule.objects.create(
+            account=self.account,
+            provider_id="arn:aws:events:us-east-1:123456789012:rule/ghost",
+            name="ghost-rule",
+            target_type="aws.lambda",
+            target_ref="arn:aws:lambda:us-east-1:123456789012:function:missing",
+        )
+        scan_run = ScanRun.objects.create(account=self.account)
+
+        created = analyze_topology(self.account, scan_run)
+
+        self.assertGreaterEqual(created, 1)
+        self.assertTrue(
+            Finding.objects.filter(account=self.account, category="topology").exists()
+        )
+
+    def test_topology_page_loads(self):
+        user = get_user_model().objects.create_user(
+            username="topo-admin", password="x", is_staff=True, is_superuser=True
+        )
+        self.client.force_login(user)
+
+        response = self.client.get(reverse("topology"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "flowchart LR")
+
+
+class ScanScheduleTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+
+    def test_is_due_logic(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from .models import ScanSchedule
+
+        schedule = ScanSchedule.objects.create(account=self.account)
+        self.assertTrue(schedule.is_due())
+
+        schedule.next_run_at = timezone.now() + timedelta(hours=1)
+        self.assertFalse(schedule.is_due())
+
+        schedule.next_run_at = timezone.now() - timedelta(minutes=1)
+        self.assertTrue(schedule.is_due())
+
+        schedule.enabled = False
+        self.assertFalse(schedule.is_due())
+
+    def test_mark_ran_advances_next_run(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from .models import ScanSchedule
+
+        schedule = ScanSchedule.objects.create(
+            account=self.account,
+            interval_minutes=ScanSchedule.Interval.HOURLY,
+        )
+        before = timezone.now()
+
+        schedule.mark_ran("success")
+
+        self.assertEqual(schedule.last_status, "success")
+        self.assertGreaterEqual(schedule.next_run_at, before + timedelta(minutes=59))
+
+    def test_run_scheduler_command_executes_due_schedules(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from .models import ScanRun, ScanSchedule
+
+        ScanSchedule.objects.create(account=self.account)
+        fake_run = ScanRun.objects.create(
+            account=self.account, status=ScanRun.Status.SUCCESS
+        )
+        out = StringIO()
+        with patch(
+            "ops.management.commands.run_scheduler.run_scan_pipeline",
+            return_value=fake_run,
+        ) as mock_pipeline:
+            call_command("run_scheduler", stdout=out)
+
+        mock_pipeline.assert_called_once()
+        schedule = ScanSchedule.objects.get(account=self.account)
+        self.assertEqual(schedule.last_status, ScanRun.Status.SUCCESS)
+        self.assertIsNotNone(schedule.next_run_at)
+
+    def test_schedule_update_view_requires_admin(self):
+        viewer = get_user_model().objects.create_user(username="sched-viewer", password="x")
+        AccountMembership.objects.create(
+            user=viewer, account=self.account, role=AccountMembership.Role.OPERATOR
+        )
+        self.client.force_login(viewer)
+
+        response = self.client.post(
+            reverse("account_schedule_update", args=[self.account.id]),
+            data={"enabled": "on", "interval_minutes": 60},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        from .models import ScanSchedule
+
+        self.assertFalse(ScanSchedule.objects.filter(account=self.account, enabled=True).exists())
+
+    def test_schedule_update_view_saves_and_sets_due(self):
+        admin = get_user_model().objects.create_user(
+            username="sched-admin", password="x", is_staff=True, is_superuser=True
+        )
+        self.client.force_login(admin)
+
+        response = self.client.post(
+            reverse("account_schedule_update", args=[self.account.id]),
+            data={"enabled": "on", "interval_minutes": 360},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        from .models import ScanSchedule
+
+        schedule = ScanSchedule.objects.get(account=self.account)
+        self.assertTrue(schedule.enabled)
+        self.assertEqual(schedule.interval_minutes, 360)
+        self.assertIsNotNone(schedule.next_run_at)
+
+
+class WebhookTriggerTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+
+    def test_invalid_token_rejected(self):
+        response = self.client.post(
+            reverse("webhook_scan_trigger", args=[self.account.id, "wrong-token"])
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_not_allowed(self):
+        response = self.client.get(
+            reverse("webhook_scan_trigger", args=[self.account.id, self.account.webhook_token])
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_valid_token_triggers_pipeline(self):
+        from .models import ScanRun
+
+        fake_run = ScanRun.objects.create(
+            account=self.account,
+            status=ScanRun.Status.SUCCESS,
+            summary={"resources": 1},
+        )
+        with patch("ops.views.run_scan_pipeline", return_value=fake_run) as mock_pipeline:
+            response = self.client.post(
+                reverse(
+                    "webhook_scan_trigger",
+                    args=[self.account.id, self.account.webhook_token],
+                )
+            )
+
+        self.assertEqual(response.status_code, 200)
+        mock_pipeline.assert_called_once_with(self.account)
+        self.assertEqual(response.json()["status"], ScanRun.Status.SUCCESS)
+
+    def test_failed_scan_returns_502(self):
+        from .models import ScanRun
+
+        fake_run = ScanRun.objects.create(
+            account=self.account,
+            status=ScanRun.Status.FAILED,
+            error_message="credentials expired",
+        )
+        with patch("ops.views.run_scan_pipeline", return_value=fake_run):
+            response = self.client.post(
+                reverse(
+                    "webhook_scan_trigger",
+                    args=[self.account.id, self.account.webhook_token],
+                )
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("credentials expired", response.json()["error"])
+
+    def test_token_rotation_changes_url(self):
+        admin = get_user_model().objects.create_user(
+            username="rotator", password="x", is_staff=True, is_superuser=True
+        )
+        self.client.force_login(admin)
+        old_token = self.account.webhook_token
+
+        response = self.client.post(
+            reverse("account_token_regenerate", args=[self.account.id])
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.account.refresh_from_db()
+        self.assertNotEqual(self.account.webhook_token, old_token)
+
+    def test_existing_accounts_get_distinct_tokens(self):
+        other = CloudAccount.objects.create(
+            name="Second", provider=CloudAccount.Provider.AWS, account_ref="2"
+        )
+        self.assertNotEqual(self.account.webhook_token, other.webhook_token)
+        self.assertGreaterEqual(len(other.webhook_token), 20)
+
+
+@override_settings(AI_ENABLED=False)
+class RemediationProposalTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+        self.finding = Finding.objects.filter(account=self.account).first()
+        self.admin = get_user_model().objects.create_user(
+            username="fixer", password="x", is_staff=True, is_superuser=True
+        )
+
+    def test_fallback_proposal_created_when_ai_disabled(self):
+        from .models import RemediationProposal
+        from .services import create_remediation_proposal
+
+        proposal = create_remediation_proposal(self.finding, requested_by=self.admin)
+
+        self.assertEqual(proposal.status, RemediationProposal.Status.FALLBACK)
+        self.assertIn(self.finding.title, proposal.body_markdown)
+        self.assertEqual(proposal.ai_meta["ai_status"], "disabled")
+
+    def test_fallback_uses_korean_when_configured(self):
+        GlobalSettings.load()
+        GlobalSettings.objects.update(report_language=GlobalSettings.ReportLanguage.KO)
+        from .services import create_remediation_proposal
+
+        proposal = create_remediation_proposal(self.finding)
+
+        self.assertIn("수정 제안", proposal.body_markdown)
+
+    def test_propose_view_creates_and_displays_proposal(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            reverse("finding_propose_fix", args=[self.finding.id])
+        )
+
+        self.assertEqual(response.status_code, 302)
+        detail = self.client.get(reverse("finding_detail", args=[self.finding.id]))
+        self.assertContains(detail, "Template fallback")
+
+    def test_viewer_cannot_propose(self):
+        viewer = get_user_model().objects.create_user(username="ro-viewer", password="x")
+        AccountMembership.objects.create(
+            user=viewer, account=self.account, role=AccountMembership.Role.VIEWER
+        )
+        self.client.force_login(viewer)
+
+        response = self.client.post(
+            reverse("finding_propose_fix", args=[self.finding.id])
+        )
+
+        self.assertEqual(response.status_code, 302)
+        from .models import RemediationProposal
+
+        self.assertEqual(RemediationProposal.objects.count(), 0)
+
+    def test_ai_generated_proposal(self):
+        with override_settings(AI_ENABLED=True):
+            AIProvider.objects.all().delete()
+            AIProvider.objects.create(
+                name="OpenAI",
+                provider=AIProvider.Provider.OPENAI,
+                model="gpt-5.5",
+                encrypted_api_key=encrypt_text("sk-test"),
+                is_active=True,
+                is_default=True,
+            )
+            from .models import RemediationProposal
+            from .services import create_remediation_proposal
+
+            with patch.object(
+                ai_module.requests,
+                "post",
+                return_value=_fake_response({"output_text": "## Root cause hypothesis\nDisk full."}),
+            ):
+                proposal = create_remediation_proposal(self.finding, requested_by=self.admin)
+
+            self.assertEqual(proposal.status, RemediationProposal.Status.GENERATED)
+            self.assertIn("Root cause", proposal.body_markdown)

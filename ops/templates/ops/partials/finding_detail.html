@@ -1,3 +1,4 @@
+{% load markdown_extras %}
 <article class="finding-detail">
   <span class="badge {{ finding.severity }}">{{ finding.get_severity_display }}</span>
   <h2>{{ finding.title }}</h2>
@@ -13,5 +14,23 @@
   </dl>
   <h3>Evidence</h3>
   <pre class="evidence">{{ finding.evidence }}</pre>
-</article>
 
+  {% if can_propose %}
+    <form method="post" action="{% url 'finding_propose_fix' finding.id %}">
+      {% csrf_token %}
+      <button class="button primary" type="submit">Propose fix with AI</button>
+    </form>
+  {% endif %}
+
+  {% for proposal in proposals %}
+    <div class="proposal">
+      <div class="proposal-meta">
+        <span>{{ proposal.get_status_display }}</span>
+        {% if proposal.ai_meta.model %}<span>{{ proposal.ai_meta.model }}</span>{% endif %}
+        <span>{{ proposal.created_at }}</span>
+        {% if proposal.requested_by %}<span>by {{ proposal.requested_by.username }}</span>{% endif %}
+      </div>
+      <div class="briefing-html">{{ proposal.body_markdown|markdown }}</div>
+    </div>
+  {% endfor %}
+</article>

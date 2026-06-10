@@ -13,6 +13,7 @@ from .models import (
     CloudAccount,
     GlobalSettings,
     NotificationSubscription,
+    ScanSchedule,
     WebhookEndpoint,
 )
 
@@ -324,6 +325,13 @@ class UserAccessForm(forms.Form):
                 )
             else:
                 AccountMembership.objects.filter(user=self.user_obj, account=account).delete()
+
+
+class ScanScheduleForm(forms.ModelForm):
+    class Meta:
+        model = ScanSchedule
+        fields = ["enabled", "interval_minutes"]
+        labels = {"interval_minutes": "Scan interval"}
 
 
 class WebhookEndpointForm(forms.ModelForm):

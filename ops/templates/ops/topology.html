@@ -1,0 +1,80 @@
+{% extends "ops/base.html" %}
+{% load static %}
+{% block title %}Topology - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="dashboard-head">
+    <div>
+      <p class="eyebrow">Infrastructure map</p>
+      <h1>{% if account %}{{ account.name }} topology{% else %}All accounts topology{% endif %}</h1>
+      <p class="muted">
+        Built from the latest scan evidence: schedules, their targets, and scanned resources.
+        Re-run a scan to refresh the map.
+      </p>
+    </div>
+    <div class="actions">
+      {% if account %}
+        <a class="button secondary" href="{% url 'topology' %}">All accounts</a>
+        <a class="button secondary" href="{% url 'account_detail' account.id %}">Back to account</a>
+      {% else %}
+        {% for acct in accounts %}
+          <a class="button secondary" href="{% url 'account_topology' acct.id %}">{{ acct.name }}</a>
+        {% endfor %}
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="metric-grid">
+    <article class="metric inventory"><span>Nodes</span><strong>{{ graph.stats.nodes }}</strong></article>
+    <article class="metric schedule"><span>Edges</span><strong>{{ graph.stats.edges }}</strong></article>
+    <article class="metric warning"><span>Orphan targets</span><strong>{{ graph.stats.orphan_schedules }}</strong></article>
+    <article class="metric cost"><span>Untriggered</span><strong>{{ graph.stats.untriggered_resources }}</strong></article>
+    <article class="metric danger"><span>Hotspots</span><strong>{{ graph.stats.hotspots }}</strong></article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Diagram</p>
+        <h2>Schedules, targets, and resources</h2>
+      </div>
+    </div>
+    {% if graph.nodes %}
+      <div class="topology-canvas">
+        <pre class="mermaid">{{ mermaid_source }}</pre>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <strong>No topology yet.</strong>
+        <p>Run a scan on a cloud account first; the map is built from scan evidence.</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Structural insights</p>
+        <h2>What the map says</h2>
+      </div>
+    </div>
+    {% if insights %}
+      <div class="compact-list">
+        {% for insight in insights %}
+          <div>
+            <strong><span class="badge {{ insight.severity }}">{{ insight.severity }}</span> {{ insight.title }}</strong>
+            <span>{{ insight.detail }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state"><strong>No structural issues detected.</strong></div>
+    {% endif %}
+  </section>
+
+  <script src="{% static 'ops/vendor/mermaid.min.js' %}"></script>
+  <script>
+    if (window.mermaid) {
+      window.mermaid.initialize({ startOnLoad: true, theme: "dark", securityLevel: "strict" });
+    }
+  </script>
+{% endblock %}

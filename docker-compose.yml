@@ -13,5 +13,18 @@ services:
     volumes:
       - infralens-data:/data
 
+  scheduler:
+    build: .
+    command: python manage.py run_scheduler --loop
+    environment:
+      DJANGO_DEBUG: "true"
+      DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1,0.0.0.0"
+      DJANGO_SECRET_KEY: "replace-this-before-real-use"
+      INFRALENS_DB_PATH: "/data/db.sqlite3"
+    volumes:
+      - infralens-data:/data
+    depends_on:
+      - web
+
 volumes:
   infralens-data:

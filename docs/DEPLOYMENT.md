@@ -56,8 +56,28 @@ environment variables, and are stored encrypted.
 
 ## Scheduled scans
 
-The web UI runs scans synchronously. For unattended daily briefings, run the
-management command from cron on the host or container:
+Three options, all running the same scan -> topology -> briefing ->
+notification pipeline:
+
+**1. Scheduler worker (recommended).** Account admins configure intervals in
+the UI; a worker executes whatever is due:
+
+```bash
+python manage.py run_scheduler --loop
+```
+
+`docker compose up` already starts this as the `scheduler` service. On a bare
+host, run it under systemd, or call `python manage.py run_scheduler` (single
+pass) from cron every few minutes.
+
+**2. Inbound trigger webhook.** Each account page shows a secret URL that
+external systems can `POST` to:
+
+```bash
+curl -X POST https://your-host/api/hooks/scan/<account-id>/<token>/
+```
+
+**3. Direct command** for one account:
 
 ```bash
 python manage.py scan_account <account-id>

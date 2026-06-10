@@ -18,6 +18,7 @@
         <input type="hidden" name="account_id" value="{{ account.id }}">
         <button class="button secondary" type="submit">Generate briefing</button>
       </form>
+      <a class="button secondary" href="{% url 'account_topology' account.id %}">Topology</a>
       {% if can_edit %}
         <a class="button secondary" href="{% url 'account_edit' account.id %}">Edit</a>
       {% endif %}
@@ -73,6 +74,46 @@
       {% endif %}
     </div>
   </section>
+
+  {% if can_edit %}
+    <section class="layout-two">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Automation</p>
+            <h2>Recurring scan schedule</h2>
+          </div>
+        </div>
+        <form method="post" action="{% url 'account_schedule_update' account.id %}" class="stacked-form">
+          {% csrf_token %}
+          {{ schedule_form.as_p }}
+          <button class="button primary" type="submit">Save schedule</button>
+        </form>
+        {% if scan_schedule %}
+          <p class="muted">
+            Last run: {{ scan_schedule.last_run_at|default:"never" }}
+            {% if scan_schedule.last_status %}({{ scan_schedule.last_status }}){% endif %}.
+            Next run: {{ scan_schedule.next_run_at|default:"-" }}.
+          </p>
+        {% endif %}
+        <p class="muted">Runs are executed by the scheduler worker (<code>manage.py run_scheduler --loop</code>).</p>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Automation</p>
+            <h2>Webhook scan trigger</h2>
+          </div>
+        </div>
+        <p class="muted">POST to this URL from CI/CD or external cron to run a scan, refresh the briefing, and fire notifications. Keep it secret.</p>
+        <div class="token-box">{{ trigger_url }}</div>
+        <form method="post" action="{% url 'account_token_regenerate' account.id %}" style="margin-top: 10px;">
+          {% csrf_token %}
+          <button class="button secondary" type="submit">Rotate token</button>
+        </form>
+      </div>
+    </section>
+  {% endif %}
 
   <section class="panel">
     <div class="panel-head">

@@ -8,7 +8,8 @@ InfraLens handles cloud credentials, so the default posture is conservative.
 - Plaintext secrets are never returned to the UI. Edit forms accept new values but leave the stored secret untouched when their fields are blank.
 - Scanners request read-only data.
 - Findings store summaries and samples, not full raw logs.
-- Remediation is never executed automatically.
+- Remediation is never executed automatically. AI remediation proposals are Markdown for human review.
+- The inbound scan trigger webhook is authenticated by a per-account random token compared in constant time. The token only allows triggering a scan; it cannot read findings or credentials. Rotate it from the account page if it leaks, and serve it over TLS only.
 
 ## Production guidance
 

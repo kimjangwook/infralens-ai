@@ -6,7 +6,7 @@ from typing import Iterable
 import requests
 from django.db.models import Count, Q
 
-from .ai import generate_ai_insight
+from .ai import generate_ai_insight, generate_remediation_text
 from .authz import has_account_role
 from .crypto import decrypt_text, encrypt_json
 from .models import (
@@ -17,6 +17,7 @@ from .models import (
     GlobalSettings,
     NotificationDelivery,
     NotificationSubscription,
+    RemediationProposal,
     Resource,
     Schedule,
     ScanRun,
@@ -185,6 +186,150 @@ def _fallback_briefing(title_account: str, groups: dict[str, list[Finding]], lan
             if finding.suggested_action:
                 lines.append(f"   - {labels['suggested_action']}: {finding.suggested_action}")
         lines.append("")
+    return "\n".join(lines)
+
+
+def run_scan_pipeline(account: CloudAccount, *, use_ai: bool = True) -> ScanRun:
+    """Scan one account and, on success, refresh the briefing and notify.
+
+    Single entry point shared by the dashboard button, the management
+    commands, the in-app scheduler, and the inbound trigger webhook so every
+    path produces the same artifacts.
+    """
+    from .scanners import run_scan
+
+    scan_run = run_scan(account)
+    if scan_run.status == ScanRun.Status.SUCCESS:
+        generate_daily_briefing(account, use_ai=use_ai)
+        dispatch_scan_notifications(scan_run)
+    return scan_run
+
+
+REMEDIATION_FALLBACK_LABELS = {
+    GlobalSettings.ReportLanguage.EN: {
+        "title": "Remediation proposal",
+        "note": (
+            "AI was unavailable, so this is a deterministic template built from "
+            "the stored evidence. InfraLens never applies changes automatically."
+        ),
+        "finding": "Finding",
+        "evidence": "Evidence",
+        "steps": "Proposed next steps",
+        "rollback": "Before applying",
+        "rollback_note": (
+            "Review each step with your team and export the current configuration "
+            "first so you can roll back."
+        ),
+    },
+    GlobalSettings.ReportLanguage.JA: {
+        "title": "修正提案",
+        "note": (
+            "AI が利用できないため、保存された証拠に基づくテンプレートを表示しています。"
+            "InfraLens が自動で変更を適用することはありません。"
+        ),
+        "finding": "検出項目",
+        "evidence": "証拠",
+        "steps": "推奨される次のステップ",
+        "rollback": "適用前の確認",
+        "rollback_note": "各手順をチームで確認し、ロールバックできるよう現在の設定を先に保存してください。",
+    },
+    GlobalSettings.ReportLanguage.KO: {
+        "title": "수정 제안",
+        "note": (
+            "AI를 사용할 수 없어 저장된 증거 기반의 템플릿을 표시합니다. "
+            "InfraLens는 변경을 자동으로 적용하지 않습니다."
+        ),
+        "finding": "발견 항목",
+        "evidence": "증거",
+        "steps": "제안되는 다음 단계",
+        "rollback": "적용 전 확인",
+        "rollback_note": "각 단계를 팀과 검토하고, 롤백할 수 있도록 현재 설정을 먼저 백업하세요.",
+    },
+}
+
+
+def create_remediation_proposal(
+    finding: Finding,
+    requested_by=None,
+) -> RemediationProposal:
+    """One-button fix proposal: AI draft with a deterministic fallback."""
+    global_settings = get_global_settings()
+    body, meta = generate_remediation_text(
+        finding=finding,
+        report_language=global_settings.report_language,
+        context=_related_infrastructure(finding),
+    )
+    status = RemediationProposal.Status.GENERATED
+    if body is None:
+        body = _fallback_remediation(finding, global_settings.report_language)
+        status = RemediationProposal.Status.FALLBACK
+    return RemediationProposal.objects.create(
+        finding=finding,
+        requested_by=requested_by,
+        status=status,
+        body_markdown=body,
+        ai_meta={"report_language": global_settings.report_language, **meta},
+    )
+
+
+def _related_infrastructure(finding: Finding) -> dict:
+    """Topology context handed to the AI so proposals see neighbors, not just
+    the single finding."""
+    ref = finding.resource_ref
+    schedules = finding.account.schedules.all()
+    resources = finding.account.resources.all()
+    related_schedules = [
+        {
+            "name": schedule.name,
+            "expression": schedule.schedule_expression,
+            "state": schedule.state,
+            "target_ref": schedule.target_ref,
+        }
+        for schedule in schedules
+        if ref and (ref in schedule.target_ref or schedule.target_ref in ref or schedule.name in ref)
+    ][:5]
+    related_resources = [
+        {
+            "name": resource.name,
+            "type": resource.resource_type,
+            "region": resource.region,
+            "metadata": resource.metadata,
+        }
+        for resource in resources
+        if ref and (ref in resource.provider_id or resource.provider_id in ref or resource.name in ref)
+    ][:5]
+    return {
+        "related_schedules": related_schedules,
+        "related_resources": related_resources,
+        "account_totals": {
+            "resources": resources.count(),
+            "schedules": schedules.count(),
+        },
+    }
+
+
+def _fallback_remediation(finding: Finding, language: str) -> str:
+    labels = REMEDIATION_FALLBACK_LABELS.get(
+        language, REMEDIATION_FALLBACK_LABELS[GlobalSettings.ReportLanguage.EN]
+    )
+    lines = [f"# {labels['title']}: {finding.title}", "", labels["note"], ""]
+    lines.append(f"## {labels['finding']}")
+    lines.append(f"- {finding.get_severity_display()} / {finding.category}")
+    if finding.resource_ref:
+        lines.append(f"- {finding.resource_ref}")
+    lines.append("")
+    lines.append(f"## {labels['evidence']}")
+    for key, value in (finding.evidence or {}).items():
+        lines.append(f"- {key}: {value}")
+    lines.append("")
+    lines.append(f"## {labels['steps']}")
+    if finding.suggested_action:
+        lines.append(f"1. {finding.suggested_action}")
+    else:
+        lines.append("1. -")
+    lines.append("")
+    lines.append(f"## {labels['rollback']}")
+    lines.append(labels["rollback_note"])
     return "\n".join(lines)
 
 

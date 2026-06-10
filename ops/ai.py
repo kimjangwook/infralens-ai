@@ -21,6 +21,13 @@ SYSTEM_PROMPT = (
     "You create evidence-backed daily cloud operations briefings."
 )
 
+REMEDIATION_SYSTEM_PROMPT = (
+    "You are InfraLens AI, a cautious CloudOps engineer. You draft remediation "
+    "proposals for one specific cloud finding. InfraLens is read-only: your "
+    "output is a proposal a human reviews and applies manually, never an "
+    "automatic change."
+)
+
 
 def generate_ai_insight(
     *,
@@ -73,6 +80,69 @@ def generate_ai_insight(
     return text, {"ai_status": "generated", **meta_base}
 
 
+def generate_remediation_text(
+    *,
+    finding: Finding,
+    report_language: str,
+    context: dict[str, Any] | None = None,
+    provider: AIProvider | None = None,
+) -> tuple[str | None, dict[str, Any]]:
+    """Draft a fix proposal for one finding. Returns (markdown, meta)."""
+    if not settings.AI_ENABLED:
+        return None, {"ai_status": "disabled"}
+    if provider is None:
+        provider = AIProvider.get_default()
+    if provider is None:
+        return None, {"ai_status": "no_provider"}
+
+    api_key = decrypt_text(provider.encrypted_api_key)
+    if not api_key:
+        return None, {"ai_status": "missing_api_key", "provider": provider.provider}
+
+    language_name = LANGUAGE_NAMES.get(report_language, "English")
+    prompt = {
+        "language": language_name,
+        "finding": {
+            "severity": finding.severity,
+            "category": finding.category,
+            "title": finding.title,
+            "account": finding.account.name,
+            "provider": finding.account.provider,
+            "resource_ref": finding.resource_ref,
+            "evidence": finding.evidence,
+            "suggested_action": finding.suggested_action,
+        },
+        "related_infrastructure": context or {},
+        "rules": [
+            "Write the entire proposal in the configured language.",
+            "Use only the provided evidence. Do not invent resources or metrics.",
+            "Structure the proposal as Markdown with these sections: "
+            "Root cause hypothesis, Proposed fix steps, Commands or IaC snippet, "
+            "Rollback plan, Risk and blast radius, Confidence (high/medium/low).",
+            "Commands must be examples for a human to review, never destructive "
+            "one-liners without a safety note.",
+            "InfraLens is read-only; phrase everything as a proposal.",
+        ],
+    }
+    user_content = json.dumps(prompt, ensure_ascii=False)
+    meta_base = {"provider": provider.provider, "model": provider.model}
+    try:
+        if provider.provider == AIProvider.Provider.OPENAI:
+            text = _call_openai(provider.model, api_key, user_content, system=REMEDIATION_SYSTEM_PROMPT)
+        elif provider.provider == AIProvider.Provider.ANTHROPIC:
+            text = _call_anthropic(provider.model, api_key, user_content, system=REMEDIATION_SYSTEM_PROMPT)
+        elif provider.provider == AIProvider.Provider.GOOGLE:
+            text = _call_google(provider.model, api_key, user_content, system=REMEDIATION_SYSTEM_PROMPT)
+        else:
+            return None, {"ai_status": "unsupported_provider", **meta_base}
+    except requests.RequestException as exc:
+        return None, {"ai_status": "request_failed", "error": str(exc)[:500], **meta_base}
+
+    if not text:
+        return None, {"ai_status": "empty_response", **meta_base}
+    return text, {"ai_status": "generated", **meta_base}
+
+
 def verify_ai_provider(provider: AIProvider) -> tuple[bool, str]:
     """Send a minimal request to confirm the provider's key and model work.
 
@@ -107,7 +177,7 @@ def verify_ai_provider(provider: AIProvider) -> tuple[bool, str]:
     return True, f"OK - {provider.get_provider_display()} responded with {provider.model}."
 
 
-def _call_openai(model: str, api_key: str, user_content: str) -> str:
+def _call_openai(model: str, api_key: str, user_content: str, system: str = SYSTEM_PROMPT) -> str:
     response = requests.post(
         "https://api.openai.com/v1/responses",
         headers={
@@ -117,7 +187,7 @@ def _call_openai(model: str, api_key: str, user_content: str) -> str:
         json={
             "model": model,
             "input": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user_content},
             ],
         },
@@ -127,7 +197,7 @@ def _call_openai(model: str, api_key: str, user_content: str) -> str:
     return _extract_openai_text(response.json())
 
 
-def _call_anthropic(model: str, api_key: str, user_content: str) -> str:
+def _call_anthropic(model: str, api_key: str, user_content: str, system: str = SYSTEM_PROMPT) -> str:
     response = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -138,7 +208,7 @@ def _call_anthropic(model: str, api_key: str, user_content: str) -> str:
         json={
             "model": model,
             "max_tokens": 2048,
-            "system": SYSTEM_PROMPT,
+            "system": system,
             "messages": [{"role": "user", "content": user_content}],
         },
         timeout=45,
@@ -147,7 +217,7 @@ def _call_anthropic(model: str, api_key: str, user_content: str) -> str:
     return _extract_anthropic_text(response.json())
 
 
-def _call_google(model: str, api_key: str, user_content: str) -> str:
+def _call_google(model: str, api_key: str, user_content: str, system: str = SYSTEM_PROMPT) -> str:
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     )
@@ -155,7 +225,7 @@ def _call_google(model: str, api_key: str, user_content: str) -> str:
         url,
         headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
         json={
-            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "system_instruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": user_content}]}],
         },
         timeout=45,

@@ -1,8 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 
 from ops.models import CloudAccount
-from ops.scanners import run_scan
-from ops.services import generate_daily_briefing
+from ops.services import run_scan_pipeline
 
 
 class Command(BaseCommand):
@@ -17,9 +16,7 @@ class Command(BaseCommand):
         except CloudAccount.DoesNotExist as exc:
             raise CommandError("Cloud account not found.") from exc
 
-        scan_run = run_scan(account)
+        scan_run = run_scan_pipeline(account)
         if scan_run.status == scan_run.Status.FAILED:
             raise CommandError(scan_run.error_message)
-        generate_daily_briefing(account)
         self.stdout.write(self.style.SUCCESS(f"Scan finished: {scan_run.id}"))
-

@@ -775,3 +775,48 @@ textarea {
     flex-direction: column;
   }
 }
+
+/* Topology page */
+.topology-canvas {
+  overflow-x: auto;
+  padding: 12px 4px;
+}
+
+.topology-canvas .mermaid {
+  background: transparent;
+  border: 0;
+  display: flex;
+  justify-content: center;
+  min-width: 320px;
+}
+
+.topology-canvas .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Remediation proposals */
+.proposal {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  margin-top: 14px;
+  padding: 14px 16px;
+}
+
+.proposal-meta {
+  color: var(--muted, #94a3b8);
+  display: flex;
+  font-size: 0.82rem;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.token-box {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+}

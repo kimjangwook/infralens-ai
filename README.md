@@ -10,8 +10,13 @@ InfraLens is not a Datadog, Wiz, CloudQuery, or Steampipe replacement. It is a b
 
 - Scans AWS EventBridge rules, Lambda functions, CloudWatch Logs, and Cost Explorer
 - Scans GCP Cloud Scheduler, Cloud Run, and Cloud Logging
-- Detects schedule, log, and cost findings with evidence
+- Builds an infrastructure topology map (schedules -> targets -> resources) from scan evidence, rendered as a Mermaid graph
+- Derives topology insights: orphan schedule targets, untriggered workloads, fan-in hotspots
+- Detects schedule, log, cost, and topology findings with evidence
 - Generates AI daily briefings in English, Japanese, or Korean
+- Drafts one-button AI remediation proposals per finding (root cause, fix steps, commands, rollback, risk)
+- Runs scans automatically on per-account schedules via the built-in scheduler worker
+- Exposes a tokenized inbound webhook so CI/CD or external cron can trigger scans
 - Supports multiple AI providers (OpenAI, Anthropic, Google) with per-provider model selection
 - Renders briefings as Markdown, not raw code blocks
 - Supports first-run owner setup, login, users, and per-cloud-account RBAC
@@ -19,9 +24,10 @@ InfraLens is not a Datadog, Wiz, CloudQuery, or Steampipe replacement. It is a b
 - Sends scan findings to user-owned webhook subscriptions
 - Stores cloud credentials, AI API keys, and webhook URLs encrypted at rest
 
-## Current MVP Scope
+## Current Scope
 
-The first version focuses on **Scheduled Cloud Job & Cost Anomaly Briefing**.
+v0.2 closes the loop: **see the whole infrastructure, keep it scanned
+automatically, and get a fix proposal with one button**.
 
 Included:
 
@@ -32,6 +38,10 @@ Included:
 - GCP Cloud Scheduler jobs
 - GCP Cloud Run services/jobs
 - GCP Cloud Logging error sampling
+- Infrastructure topology map and structural insight findings
+- Per-account recurring scan schedules (scheduler worker)
+- Inbound webhook scan trigger for CI/CD and external cron
+- One-button AI remediation proposals with deterministic fallback
 - Daily briefing generation
 - Generic webhook notifications
 
@@ -39,7 +49,7 @@ Not included yet:
 
 - Kubernetes
 - Azure
-- Automatic remediation
+- Automatic remediation (proposals are text only, by design)
 - Full raw log retention
 - Advanced ML anomaly detection
 - Full network/IAM graphing
@@ -109,6 +119,58 @@ Reports are generated in the language chosen in Settings:
 - Korean
 
 If no active provider is configured or the API call fails, InfraLens stores a deterministic fallback briefing in the same configured language.
+
+## Topology Map
+
+The **Topology** page (global and per account) renders schedules, their
+targets, and scanned resources as a Mermaid flowchart, built entirely from the
+latest scan evidence — no extra cloud API calls. Structural problems are
+persisted as `topology` findings on every scan:
+
+- a schedule points at a resource the scan could not find (orphan target)
+- a triggerable workload has no inbound schedule (possibly unused)
+- many schedules converge on one resource (fan-in hotspot)
+- a schedule is disabled or paused
+
+Mermaid is vendored under `ops/static/ops/vendor/`, so the map works offline.
+
+## Automation
+
+Two paths keep accounts scanned without anyone clicking a button. Both run the
+same pipeline as the dashboard: scan -> topology analysis -> briefing ->
+webhook notifications.
+
+**1. In-app schedule + scheduler worker.** Account admins set an interval
+(hourly to weekly) on the account page. A worker executes due schedules:
+
+```bash
+python manage.py run_scheduler            # single pass (cron-friendly)
+python manage.py run_scheduler --loop     # long-running worker
+```
+
+`docker compose up` starts a `scheduler` service running the loop alongside
+the web container.
+
+**2. Inbound webhook trigger.** Each account has a secret tokenized URL,
+shown on the account page (admins only), for CI/CD or external cron:
+
+```bash
+curl -X POST https://your-host/api/hooks/scan/<account-id>/<token>/
+```
+
+The response is JSON with the scan run id, status, and summary. Rotate the
+token from the account page if it leaks.
+
+## One-Button Fix Proposals
+
+Every finding page has **Propose fix with AI**. InfraLens sends the finding's
+evidence plus its topology neighborhood (related schedules and resources) to
+the default AI provider and stores a Markdown proposal with: root cause
+hypothesis, fix steps, commands or IaC snippet, rollback plan, risk and blast
+radius, and a confidence level. If AI is disabled or unreachable, a
+deterministic template proposal is generated from the stored evidence instead.
+
+Proposals are text for a human to review. InfraLens never executes changes.
 
 ## AWS Permissions
 
@@ -203,10 +265,12 @@ For production, see the [deployment guide](docs/DEPLOYMENT.md): set a strong `DJ
 infralens/
   settings.py
 ops/
-  models.py          # accounts, memberships, scans, findings, webhooks
+  models.py          # accounts, memberships, scans, findings, schedules, proposals, webhooks
   scanners/          # AWS/GCP read-only scanners
+  topology.py        # infrastructure graph, Mermaid rendering, structural insights
+  management/        # scan_account, run_scheduler, seed_demo commands
   templates/         # Django + HTMX UI
-  static/            # dashboard JS/CSS
+  static/            # dashboard JS/CSS, vendored htmx + mermaid
 docs/
 examples/
 scripts/

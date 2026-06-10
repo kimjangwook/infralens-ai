@@ -20,8 +20,13 @@ and AI-drafted proposals. The roadmap below is ordered to maximize two things:
 | Pro | Hosted or license key | ~$29/mo | Unlimited accounts, scheduling SLAs, AI proposal history, Slack/Notion export |
 | Team | Hosted | ~$99/mo | Team RBAC, audit log export, custom rules, priority support |
 
-The free tier is the marketing engine; every paid feature must be an
-*operations convenience*, never a security downgrade of the free core.
+**The open-core promise:** the self-hosted core in this repository is and will
+remain fully functional under the MIT license — scanners, topology, briefings,
+proposals, automation, and security features included. Paid tiers only add
+*operations convenience* (hosting, support, higher limits), never a security
+downgrade of the free core. In-code plan limits are a convenience for the
+hosted offering, not a legal barrier; the MIT license permits forks that
+remove them, and the real commercial moat is hosting, support, and trademark.
 
 ## v0.1 — Scheduled job & cost briefing (shipped)
 
@@ -79,7 +84,7 @@ Everything needed to charge money without rewriting the product.
 - Usage metering (scans, AI tokens) and plan limits
 - Team workspaces and invitations
 
-## v1.0 — Commercial launch (code complete)
+## v1.0 — Hosted offering & sustainability (code complete)
 
 - Custom rule engine (user-defined detectors and severities) — shipped
 - Audit log export and SOC 2 preparation checklist — shipped
@@ -89,9 +94,16 @@ Everything needed to charge money without rewriting the product.
   Stripe webhook, metering); the remaining work is operational: provisioning,
   status page, support process, and a live Stripe account
 
-## Post-1.0 — Next bets
+## Post-1.0 — Next bets (validation-driven)
+
+Everything above was built plan-first. From here, items are promoted onto the
+roadmap only after real usage validates them — user reports, hosted-beta
+telemetry, or repeated community requests. Current candidates:
 
 - Scan-aware cost forecasting on top of the billing data
 - Deeper network/IAM graphing (security groups, VPC peering, role policies)
 - Remediation proposals as ready-to-open pull requests against IaC repos
 - Per-tenant isolation hardening for the hosted offering
+
+If you run InfraLens and miss something, open an issue — adoption feedback is
+what moves a candidate up this list.

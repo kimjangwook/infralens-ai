@@ -1,6 +1,7 @@
 services:
   web:
     build: .
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
@@ -15,6 +16,7 @@ services:
 
   scheduler:
     build: .
+    restart: unless-stopped
     command: python manage.py run_scheduler --loop
     environment:
       DJANGO_DEBUG: "true"
@@ -28,6 +30,7 @@ services:
 
   worker:
     build: .
+    restart: unless-stopped
     command: python manage.py run_worker --loop
     environment:
       DJANGO_DEBUG: "true"

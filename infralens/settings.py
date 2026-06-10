@@ -126,6 +126,19 @@ AI_ENABLED = os.getenv("INFRALENS_AI_ENABLED", "true").lower() in {
     "on",
 }
 
+# When true, the dashboard "Run scan" button and the inbound trigger webhook
+# enqueue a BackgroundJob for the run_worker process instead of scanning
+# inside the request. Requires a running worker.
+ASYNC_SCANS = os.getenv("INFRALENS_ASYNC_SCANS", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+# The /metrics endpoint is disabled unless a token is configured.
+METRICS_TOKEN = os.getenv("INFRALENS_METRICS_TOKEN", "")
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)

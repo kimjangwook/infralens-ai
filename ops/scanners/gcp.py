@@ -143,6 +143,7 @@ def _scan_cloud_run(
                     "create_time": item.get("createTime"),
                     "update_time": item.get("updateTime"),
                     "labels": item.get("labels", {}),
+                    "iam_role": item.get("template", {}).get("serviceAccount", ""),
                 },
             )
             counter.resources += 1

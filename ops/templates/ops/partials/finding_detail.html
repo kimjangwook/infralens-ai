@@ -15,11 +15,23 @@
   <h3>Evidence</h3>
   <pre class="evidence">{{ finding.evidence }}</pre>
 
+  {% if finding.github_issue_url %}
+    <p><a href="{{ finding.github_issue_url }}" target="_blank" rel="noopener">GitHub issue ↗</a></p>
+  {% endif %}
+
   {% if can_propose %}
-    <form method="post" action="{% url 'finding_propose_fix' finding.id %}">
-      {% csrf_token %}
-      <button class="button primary" type="submit">Propose fix with AI</button>
-    </form>
+    <div class="actions">
+      <form method="post" action="{% url 'finding_propose_fix' finding.id %}">
+        {% csrf_token %}
+        <button class="button primary" type="submit">Propose fix with AI</button>
+      </form>
+      {% if not finding.github_issue_url %}
+        <form method="post" action="{% url 'finding_github_issue' finding.id %}">
+          {% csrf_token %}
+          <button class="button secondary" type="submit">Create GitHub issue</button>
+        </form>
+      {% endif %}
+    </div>
   {% endif %}
 
   {% for proposal in proposals %}

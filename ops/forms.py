@@ -306,9 +306,40 @@ class CloudAccountForm(forms.ModelForm):
 
 
 class GlobalSettingsForm(forms.ModelForm):
+    github_token = forms.CharField(
+        label="GitHub token",
+        required=False,
+        widget=forms.PasswordInput(render_value=False),
+        help_text=(
+            "Fine-grained token with issues:write on the repository. Stored "
+            "encrypted; leave blank to keep the current token."
+        ),
+    )
+
     class Meta:
         model = GlobalSettings
-        fields = ["report_language"]
+        fields = [
+            "report_language",
+            "daily_report_enabled",
+            "daily_report_hour",
+            "github_repo",
+        ]
+
+    def clean_daily_report_hour(self) -> int:
+        hour = self.cleaned_data.get("daily_report_hour") or 0
+        if hour > 23:
+            raise forms.ValidationError("Use an hour between 0 and 23 (UTC).")
+        return hour
+
+    def save(self, commit: bool = True) -> GlobalSettings:
+        settings_obj = super().save(commit=False)
+        token = (self.cleaned_data.get("github_token") or "").strip()
+        if token:
+            settings_obj.encrypted_github_token = encrypt_text(token)
+            settings_obj.github_token_hint = secret_hint(token)
+        if commit:
+            settings_obj.save()
+        return settings_obj
 
 
 class AIProviderForm(forms.ModelForm):
@@ -438,7 +469,7 @@ class WebhookEndpointForm(forms.ModelForm):
 
     class Meta:
         model = WebhookEndpoint
-        fields = ["name", "provider", "is_active"]
+        fields = ["name", "provider", "receive_daily_report", "is_active"]
 
     def clean(self) -> dict:
         cleaned = super().clean()

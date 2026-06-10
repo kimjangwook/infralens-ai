@@ -26,5 +26,19 @@ services:
     depends_on:
       - web
 
+  worker:
+    build: .
+    command: python manage.py run_worker --loop
+    environment:
+      DJANGO_DEBUG: "true"
+      DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1,0.0.0.0"
+      DJANGO_SECRET_KEY: "replace-this-before-real-use"
+      INFRALENS_DB_PATH: "/data/db.sqlite3"
+      INFRALENS_ASYNC_SCANS: "${INFRALENS_ASYNC_SCANS:-false}"
+    volumes:
+      - infralens-data:/data
+    depends_on:
+      - web
+
 volumes:
   infralens-data:

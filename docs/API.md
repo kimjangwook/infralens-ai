@@ -39,6 +39,40 @@ python manage.py run_scheduler --loop          # poll every 60s (compose service
 python manage.py run_scheduler --loop --poll-seconds 30
 ```
 
+## Background jobs
+
+With `INFRALENS_ASYNC_SCANS=true`, the dashboard scan button and the inbound
+trigger webhook enqueue a `BackgroundJob` (the webhook returns `202` with the
+job id) instead of scanning inside the request. The worker processes the
+queue:
+
+```bash
+python manage.py run_worker --loop          # compose `worker` service
+python manage.py run_worker                 # single drain, cron-friendly
+```
+
+Job claiming uses an atomic conditional UPDATE, so several workers can run in
+parallel without double execution.
+
+## Combined daily report
+
+When enabled in Settings, the scheduler generates one all-accounts briefing
+per day after the configured UTC hour and sends it to every webhook endpoint
+flagged with "receive daily report" (generic JSON, Slack text, or Notion page).
+
+## GitHub issues
+
+`POST /findings/<finding-id>/github-issue/` (session auth, operator role)
+opens an issue in the repository configured under Settings, using the
+encrypted fine-grained token. The issue URL is stored on the finding.
+
+## Metrics
+
+`GET /metrics?token=...` returns Prometheus-style gauges and counters
+(accounts, open findings by severity, scan runs by status, due schedules,
+job queue depth). The endpoint returns 404 unless `INFRALENS_METRICS_TOKEN`
+is set, and 403 on a token mismatch.
+
 ## Remediation proposals
 
 `POST /findings/<finding-id>/propose/` (session auth, operator role) generates

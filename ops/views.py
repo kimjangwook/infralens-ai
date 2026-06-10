@@ -45,8 +45,10 @@ from .models import (
 from .ai import verify_ai_provider
 from .services import (
     account_stats,
+    create_github_issue,
     create_remediation_proposal,
     dashboard_stats,
+    enqueue_scan,
     finding_summary_by_category,
     generate_daily_briefing,
     get_global_settings,
@@ -297,6 +299,15 @@ def account_scan(request: HttpRequest, account_id) -> HttpResponse:
     if not has_account_role(request.user, account, AccountMembership.Role.OPERATOR):
         messages.error(request, "You need operator access to run scans.")
         return redirect("account_detail", account_id=account.id)
+    from django.conf import settings as django_settings
+
+    if django_settings.ASYNC_SCANS:
+        job = enqueue_scan(account)
+        messages.success(
+            request,
+            f"Scan queued for {account.name} (job {job.id}). The worker will pick it up.",
+        )
+        return redirect("account_detail", account_id=account.id)
     scan_run = run_scan_pipeline(account)
     if scan_run.status == scan_run.Status.SUCCESS:
         messages.success(request, f"Scan finished for {account.name}.")
@@ -411,6 +422,12 @@ def webhook_scan_trigger(request: HttpRequest, account_id, token: str) -> JsonRe
     if not constant_time_compare(token, account.webhook_token):
         return JsonResponse({"error": "invalid token"}, status=403)
 
+    from django.conf import settings as django_settings
+
+    if django_settings.ASYNC_SCANS:
+        job = enqueue_scan(account)
+        return JsonResponse({"job": str(job.id), "status": "queued"}, status=202)
+
     scan_run = run_scan_pipeline(account)
     payload = {
         "scan_run": str(scan_run.id),
@@ -444,6 +461,67 @@ def finding_propose_fix(request: HttpRequest, finding_id) -> HttpResponse:
             "AI was unavailable; a template proposal was generated from the evidence.",
         )
     return redirect("finding_detail", finding_id=finding.id)
+
+
+@product_login_required
+@require_POST
+def finding_github_issue(request: HttpRequest, finding_id) -> HttpResponse:
+    finding = get_object_or_404(
+        Finding.objects.select_related("account").filter(
+            account__in=accessible_accounts(request.user)
+        ),
+        id=finding_id,
+    )
+    if not has_account_role(request.user, finding.account, AccountMembership.Role.OPERATOR):
+        messages.error(request, "You need operator access to create GitHub issues.")
+        return redirect("finding_detail", finding_id=finding.id)
+    ok, message = create_github_issue(finding)
+    if ok:
+        messages.success(request, f"GitHub issue created: {message}")
+    else:
+        messages.error(request, message)
+    return redirect("finding_detail", finding_id=finding.id)
+
+
+@require_GET
+def metrics(request: HttpRequest) -> HttpResponse:
+    """Prometheus-style metrics. Disabled unless INFRALENS_METRICS_TOKEN is set."""
+    from django.conf import settings as django_settings
+
+    from .models import BackgroundJob, ScanRun, ScanSchedule
+
+    token = django_settings.METRICS_TOKEN
+    if not token:
+        return HttpResponse(status=404)
+    supplied = request.GET.get("token", "") or request.headers.get(
+        "Authorization", ""
+    ).removeprefix("Bearer ").strip()
+    if not constant_time_compare(supplied, token):
+        return HttpResponse(status=403)
+
+    lines = [
+        "# TYPE infralens_accounts gauge",
+        f"infralens_accounts {CloudAccount.objects.count()}",
+        "# TYPE infralens_resources gauge",
+        f"infralens_resources {sum(a.resources.count() for a in CloudAccount.objects.all())}",
+        "# TYPE infralens_open_findings gauge",
+    ]
+    open_findings = Finding.objects.filter(status=Finding.Status.OPEN)
+    for severity, _ in Finding.Severity.choices:
+        count = open_findings.filter(severity=severity).count()
+        lines.append(f'infralens_open_findings{{severity="{severity}"}} {count}')
+    lines.append("# TYPE infralens_scan_runs_total counter")
+    for status, _ in ScanRun.Status.choices:
+        count = ScanRun.objects.filter(status=status).count()
+        lines.append(f'infralens_scan_runs_total{{status="{status}"}} {count}')
+    lines.append("# TYPE infralens_schedules_due gauge")
+    due = sum(1 for s in ScanSchedule.objects.filter(enabled=True) if s.is_due())
+    lines.append(f"infralens_schedules_due {due}")
+    lines.append("# TYPE infralens_jobs gauge")
+    for status, _ in BackgroundJob.Status.choices:
+        count = BackgroundJob.objects.filter(status=status).count()
+        lines.append(f'infralens_jobs{{status="{status}"}} {count}')
+    return HttpResponse("\n".join(lines) + "\n", content_type="text/plain; version=0.0.4")
 
 
 @product_login_required

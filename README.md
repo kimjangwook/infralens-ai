@@ -20,7 +20,12 @@ InfraLens is not a Datadog, Wiz, CloudQuery, or Steampipe replacement. It is a b
 - Generates AI daily briefings in English, Japanese, or Korean
 - Drafts one-button AI remediation proposals per finding (root cause, fix steps, commands, rollback, risk)
 - Runs scans automatically on per-account schedules via the built-in scheduler worker
+- Offloads scans to a DB-backed background job queue (`run_worker`) when `INFRALENS_ASYNC_SCANS` is on
+- Generates a combined all-accounts daily report and sends it to flagged webhook endpoints
+- Creates GitHub issues from findings with one button (repo and token configured in Settings)
 - Exposes a tokenized inbound webhook so CI/CD or external cron can trigger scans
+- Serves Prometheus-style metrics at `/metrics` when a metrics token is configured
+- Shows IAM roles / service accounts as identity nodes in the topology map
 - Supports multiple AI providers (OpenAI, Anthropic, Google) with per-provider model selection
 - Renders briefings as Markdown, not raw code blocks
 - Supports first-run owner setup, login, users, and per-cloud-account RBAC

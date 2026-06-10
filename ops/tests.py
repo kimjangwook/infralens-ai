@@ -1246,3 +1246,221 @@ class BillingExportValidationTests(TestCase):
         self.assertTrue(
             Finding.objects.filter(title="GCP billing export table id is invalid").exists()
         )
+
+
+class BackgroundJobTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+
+    def test_claim_and_process_scan_job(self):
+        from .models import BackgroundJob, ScanRun
+        from .services import claim_next_job, enqueue_scan, process_job
+        from . import services as services_module
+
+        enqueue_scan(self.account)
+        job = claim_next_job()
+        self.assertIsNotNone(job)
+        self.assertEqual(job.status, BackgroundJob.Status.RUNNING)
+        # A second claim finds nothing while the first is running.
+        self.assertIsNone(claim_next_job())
+
+        fake_run = ScanRun.objects.create(
+            account=self.account, status=ScanRun.Status.SUCCESS
+        )
+        with patch.object(services_module, "run_scan_pipeline", return_value=fake_run):
+            process_job(job)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, BackgroundJob.Status.DONE)
+        self.assertEqual(job.result["status"], ScanRun.Status.SUCCESS)
+
+    def test_failed_scan_marks_job_failed(self):
+        from .models import BackgroundJob, ScanRun
+        from .services import claim_next_job, enqueue_scan, process_job
+        from . import services as services_module
+
+        enqueue_scan(self.account)
+        job = claim_next_job()
+        fake_run = ScanRun.objects.create(
+            account=self.account,
+            status=ScanRun.Status.FAILED,
+            error_message="expired credentials",
+        )
+        with patch.object(services_module, "run_scan_pipeline", return_value=fake_run):
+            process_job(job)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, BackgroundJob.Status.FAILED)
+        self.assertIn("expired", job.error_message)
+
+    @override_settings(ASYNC_SCANS=True)
+    def test_webhook_trigger_enqueues_when_async(self):
+        from .models import BackgroundJob
+
+        response = self.client.post(
+            reverse(
+                "webhook_scan_trigger",
+                args=[self.account.id, self.account.webhook_token],
+            )
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(BackgroundJob.objects.count(), 1)
+
+
+@override_settings(AI_ENABLED=False)
+class DailyReportTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+
+    def test_report_generated_once_per_day_after_hour(self):
+        from datetime import datetime, timezone as dt_timezone
+
+        from .services import maybe_generate_daily_report
+
+        GlobalSettings.load()
+        GlobalSettings.objects.update(daily_report_enabled=True, daily_report_hour=9)
+
+        early = datetime(2026, 6, 10, 7, 0, tzinfo=dt_timezone.utc)
+        self.assertIsNone(maybe_generate_daily_report(early))
+
+        due = datetime(2026, 6, 10, 10, 0, tzinfo=dt_timezone.utc)
+        briefing = maybe_generate_daily_report(due)
+        self.assertIsNotNone(briefing)
+        self.assertIsNone(briefing.account)
+
+        # Second call the same day is a no-op.
+        self.assertIsNone(maybe_generate_daily_report(due))
+
+    def test_disabled_report_never_generates(self):
+        from datetime import datetime, timezone as dt_timezone
+
+        from .services import maybe_generate_daily_report
+
+        due = datetime(2026, 6, 10, 23, 0, tzinfo=dt_timezone.utc)
+        self.assertIsNone(maybe_generate_daily_report(due))
+
+    def test_dispatch_sends_to_flagged_endpoints(self):
+        from . import services as services_module
+        from .services import dispatch_daily_report, generate_daily_briefing
+
+        user = get_user_model().objects.create_user(username="report-user")
+        WebhookEndpoint.objects.create(
+            user=user,
+            name="Reports",
+            encrypted_url=encrypt_text("https://hooks.example.test/report"),
+            receive_daily_report=True,
+        )
+        WebhookEndpoint.objects.create(
+            user=user,
+            name="No reports",
+            encrypted_url=encrypt_text("https://hooks.example.test/other"),
+            receive_daily_report=False,
+        )
+        briefing = generate_daily_briefing(None, use_ai=False)
+
+        with patch.object(
+            services_module.requests, "post", return_value=_fake_response({})
+        ) as mock_post:
+            delivered = dispatch_daily_report(briefing)
+
+        self.assertEqual(delivered, 1)
+        self.assertEqual(mock_post.call_count, 1)
+
+
+class GitHubIssueTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+        self.finding = Finding.objects.filter(account=self.account).first()
+        self.admin = get_user_model().objects.create_user(
+            username="gh-admin", password="x", is_staff=True, is_superuser=True
+        )
+        self.client.force_login(self.admin)
+
+    def test_requires_configuration(self):
+        from .services import create_github_issue
+
+        ok, message = create_github_issue(self.finding)
+
+        self.assertFalse(ok)
+        self.assertIn("Settings", message)
+
+    def test_creates_issue_and_stores_url(self):
+        from . import services as services_module
+        from .services import create_github_issue
+
+        settings_obj = GlobalSettings.load()
+        settings_obj.github_repo = "owner/repo"
+        settings_obj.encrypted_github_token = encrypt_text("ghp_test")
+        settings_obj.save()
+
+        with patch.object(
+            services_module.requests,
+            "post",
+            return_value=_fake_response({"html_url": "https://github.com/owner/repo/issues/1"}),
+        ) as mock_post:
+            ok, url = create_github_issue(self.finding)
+
+        self.assertTrue(ok)
+        self.finding.refresh_from_db()
+        self.assertEqual(self.finding.github_issue_url, url)
+        called_url = mock_post.call_args.args[0]
+        self.assertIn("repos/owner/repo/issues", called_url)
+
+    def test_view_requires_operator(self):
+        viewer = get_user_model().objects.create_user(username="gh-viewer", password="x")
+        AccountMembership.objects.create(
+            user=viewer, account=self.account, role=AccountMembership.Role.VIEWER
+        )
+        self.client.force_login(viewer)
+
+        response = self.client.post(
+            reverse("finding_github_issue", args=[self.finding.id])
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.finding.refresh_from_db()
+        self.assertEqual(self.finding.github_issue_url, "")
+
+
+class MetricsTests(TestCase):
+    def test_disabled_without_token(self):
+        response = self.client.get(reverse("metrics"))
+        self.assertEqual(response.status_code, 404)
+
+    @override_settings(METRICS_TOKEN="metrics-secret")
+    def test_wrong_token_rejected(self):
+        response = self.client.get(reverse("metrics"), {"token": "nope"})
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(METRICS_TOKEN="metrics-secret")
+    def test_metrics_exposed_with_token(self):
+        seed_demo_data()
+
+        response = self.client.get(reverse("metrics"), {"token": "metrics-secret"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn("infralens_accounts 1", body)
+        self.assertIn('infralens_open_findings{severity="warning"}', body)
+
+
+class IamEdgeTests(TestCase):
+    def test_lambda_role_becomes_iam_node(self):
+        from .models import Resource
+        from .topology import build_topology, render_mermaid
+
+        account = seed_demo_data()
+        Resource.objects.filter(account=account, name="daily-export").update(
+            metadata={
+                "runtime": "python3.12",
+                "iam_role": "arn:aws:iam::123456789012:role/daily-export-role",
+            }
+        )
+
+        graph = build_topology([account])
+
+        iam_nodes = [node for node in graph.nodes if node.kind == "iam"]
+        self.assertEqual(len(iam_nodes), 1)
+        self.assertEqual(iam_nodes[0].label, "daily-export-role")
+        self.assertIn("daily-export-role", render_mermaid(graph))

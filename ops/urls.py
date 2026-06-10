@@ -61,6 +61,12 @@ urlpatterns = [
         views.finding_propose_fix,
         name="finding_propose_fix",
     ),
+    path(
+        "findings/<uuid:finding_id>/github-issue/",
+        views.finding_github_issue,
+        name="finding_github_issue",
+    ),
+    path("metrics", views.metrics, name="metrics"),
     path("demo/seed/", views.demo_seed, name="demo_seed"),
     path("healthz/", views.healthz, name="healthz"),
 ]

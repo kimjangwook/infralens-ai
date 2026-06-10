@@ -7,6 +7,8 @@ from .models import (
     DailyBriefing,
     Finding,
     GlobalSettings,
+    BackgroundJob,
+    CustomRule,
     NotificationDelivery,
     NotificationSubscription,
     RemediationProposal,
@@ -106,6 +108,19 @@ class RemediationProposalAdmin(admin.ModelAdmin):
     list_display = ("finding", "status", "requested_by", "created_at")
     list_filter = ("status",)
     search_fields = ("finding__title",)
+
+
+@admin.register(BackgroundJob)
+class BackgroundJobAdmin(admin.ModelAdmin):
+    list_display = ("kind", "account", "status", "created_at", "finished_at")
+    list_filter = ("kind", "status")
+
+
+@admin.register(CustomRule)
+class CustomRuleAdmin(admin.ModelAdmin):
+    list_display = ("name", "account", "target", "field_path", "operator", "severity", "enabled")
+    list_filter = ("target", "operator", "severity", "enabled")
+    search_fields = ("name", "field_path", "value")
 
 
 @admin.register(NotificationDelivery)

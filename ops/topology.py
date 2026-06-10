@@ -78,6 +78,7 @@ def _add_account(graph: TopologyGraph, account: CloudAccount) -> None:
     inbound: dict[str, int] = {}
     by_provider_id = {resource.provider_id: resource for resource in resources}
 
+    iam_nodes: dict[str, str] = {}
     for resource in resources:
         node_id = f"r_{resource.id.hex[:10]}"
         resource_nodes[resource.provider_id] = node_id
@@ -92,6 +93,24 @@ def _add_account(graph: TopologyGraph, account: CloudAccount) -> None:
                 detail=resource.resource_type,
             )
         )
+        iam_ref = (resource.metadata or {}).get("iam_role", "")
+        if iam_ref:
+            if iam_ref not in iam_nodes:
+                iam_id = f"i_{len(iam_nodes)}_{resource.id.hex[:8]}"
+                iam_nodes[iam_ref] = iam_id
+                graph.nodes.append(
+                    TopologyNode(
+                        id=iam_id,
+                        label=iam_ref.rsplit("/", 1)[-1],
+                        kind="iam",
+                        account=account.name,
+                        provider=account.provider,
+                        detail="identity",
+                    )
+                )
+            graph.edges.append(
+                TopologyEdge(source=node_id, target=iam_nodes[iam_ref])
+            )
 
     external_nodes: dict[str, str] = {}
     for schedule in schedules:
@@ -196,6 +215,8 @@ def render_mermaid(graph: TopologyGraph) -> str:
                 lines.append(f'    {node.id}(["{label}"])')
             elif node.kind == "external":
                 lines.append(f'    {node.id}[/"{label}"/]')
+            elif node.kind == "iam":
+                lines.append(f'    {node.id}{{{{"{label}"}}}}')
             else:
                 lines.append(f'    {node.id}["{label}"]')
             css = node.kind if node.state != "inactive" else "inactive"
@@ -211,6 +232,7 @@ def render_mermaid(graph: TopologyGraph) -> str:
             "  classDef resource fill:#064e3b,stroke:#10b981,color:#d1fae5",
             "  classDef external fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-dasharray: 4 3",
             "  classDef inactive fill:#52525b,stroke:#71717a,color:#d4d4d8",
+            "  classDef iam fill:#713f12,stroke:#f59e0b,color:#fef3c7",
         ]
     )
     return "\n".join(lines)

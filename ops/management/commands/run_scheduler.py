@@ -4,7 +4,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from ops.models import ScanRun, ScanSchedule
-from ops.services import run_scan_pipeline
+from ops.services import maybe_generate_daily_report, run_scan_pipeline
 
 
 class Command(BaseCommand):
@@ -41,6 +41,9 @@ class Command(BaseCommand):
     def run_due_schedules(self) -> int:
         now = timezone.now()
         executed = 0
+        briefing = maybe_generate_daily_report(now)
+        if briefing:
+            self.stdout.write(self.style.SUCCESS(f"Combined daily report: {briefing.title}"))
         due = ScanSchedule.objects.select_related("account").filter(enabled=True)
         for schedule in due:
             if not schedule.is_due(now):

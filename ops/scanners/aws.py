@@ -83,6 +83,7 @@ def _scan_lambdas(
                     "memory_size": item.get("MemorySize"),
                     "timeout": item.get("Timeout"),
                     "last_modified": item.get("LastModified"),
+                    "iam_role": item.get("Role", ""),
                 },
             )
             counter.resources += 1

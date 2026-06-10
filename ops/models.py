@@ -268,6 +268,7 @@ class Finding(models.Model):
     resource_ref = models.CharField(max_length=500, blank=True)
     evidence = models.JSONField(default=dict, blank=True)
     suggested_action = models.TextField(blank=True)
+    github_issue_url = models.URLField(blank=True)
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
@@ -352,6 +353,22 @@ class GlobalSettings(models.Model):
         choices=ReportLanguage.choices,
         default=ReportLanguage.EN,
     )
+    daily_report_enabled = models.BooleanField(
+        default=False,
+        help_text="Generate one combined briefing across all accounts every day.",
+    )
+    daily_report_hour = models.PositiveSmallIntegerField(
+        default=9,
+        help_text="UTC hour (0-23) after which the scheduler generates the combined report.",
+    )
+    last_daily_report_date = models.DateField(null=True, blank=True)
+    github_repo = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="owner/repo used when creating GitHub issues from findings.",
+    )
+    encrypted_github_token = models.TextField(blank=True)
+    github_token_hint = models.CharField(max_length=120, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -442,6 +459,10 @@ class WebhookEndpoint(models.Model):
         blank=True,
         help_text="Provider-specific options, e.g. notion_parent_page_id.",
     )
+    receive_daily_report = models.BooleanField(
+        default=False,
+        help_text="Also send the combined daily report to this endpoint.",
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -479,6 +500,46 @@ class NotificationSubscription(models.Model):
 
     def __str__(self) -> str:
         return f"{self.endpoint} -> {self.account}"
+
+
+class BackgroundJob(models.Model):
+    """Minimal DB-backed job queue so long scans can run off the request path.
+
+    The ``run_worker`` management command claims queued jobs with an atomic
+    UPDATE, so multiple workers can run side by side without double execution.
+    """
+
+    class Kind(models.TextChoices):
+        SCAN = "scan", "Account scan"
+        DAILY_REPORT = "daily_report", "Combined daily report"
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        DONE = "done", "Done"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    kind = models.CharField(max_length=24, choices=Kind.choices)
+    account = models.ForeignKey(
+        CloudAccount,
+        on_delete=models.CASCADE,
+        related_name="background_jobs",
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
+    result = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.kind} ({self.status})"
 
 
 class CustomRule(models.Model):

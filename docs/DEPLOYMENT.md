@@ -50,6 +50,8 @@ location / {
 | `DJANGO_SECURE_HSTS_SECONDS` | HSTS max-age. |
 | `INFRALENS_DB_PATH` | SQLite path; point at a mounted volume. |
 | `INFRALENS_AI_ENABLED` | `false` to disable AI calls and always use the fallback briefing. |
+| `INFRALENS_ASYNC_SCANS` | `true` to run scans through the background worker instead of the request. |
+| `INFRALENS_METRICS_TOKEN` | Enables `/metrics` (Prometheus format) when set. |
 
 AI provider keys are configured in the app (Settings -> AI providers), not via
 environment variables, and are stored encrypted.

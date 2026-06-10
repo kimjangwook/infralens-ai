@@ -6,11 +6,14 @@ from typing import Iterable
 import requests
 from django.db.models import Count, Q
 
+from django.utils import timezone
+
 from .ai import generate_ai_insight, generate_remediation_text
 from .authz import has_account_role
 from .crypto import decrypt_text, encrypt_json
 from .models import (
     AccountMembership,
+    BackgroundJob,
     CloudAccount,
     DailyBriefing,
     Finding,
@@ -204,6 +207,182 @@ def run_scan_pipeline(account: CloudAccount, *, use_ai: bool = True) -> ScanRun:
         generate_daily_briefing(account, use_ai=use_ai)
         dispatch_scan_notifications(scan_run)
     return scan_run
+
+
+def enqueue_scan(account: CloudAccount) -> BackgroundJob:
+    """Queue a scan for the background worker instead of running it inline."""
+    return BackgroundJob.objects.create(
+        kind=BackgroundJob.Kind.SCAN,
+        account=account,
+    )
+
+
+def claim_next_job() -> BackgroundJob | None:
+    """Atomically claim one queued job; safe with multiple workers."""
+    job = BackgroundJob.objects.filter(status=BackgroundJob.Status.QUEUED).first()
+    if job is None:
+        return None
+    claimed = BackgroundJob.objects.filter(
+        pk=job.pk, status=BackgroundJob.Status.QUEUED
+    ).update(status=BackgroundJob.Status.RUNNING, started_at=timezone.now())
+    if not claimed:
+        return None
+    job.refresh_from_db()
+    return job
+
+
+def process_job(job: BackgroundJob) -> None:
+    try:
+        if job.kind == BackgroundJob.Kind.SCAN and job.account:
+            scan_run = run_scan_pipeline(job.account)
+            job.result = {"scan_run": str(scan_run.id), "status": scan_run.status}
+            if scan_run.status == ScanRun.Status.FAILED:
+                raise RuntimeError(scan_run.error_message or "scan failed")
+        elif job.kind == BackgroundJob.Kind.DAILY_REPORT:
+            briefing = generate_daily_briefing(None)
+            dispatch_daily_report(briefing)
+            job.result = {"briefing": str(briefing.id)}
+        else:
+            raise ValueError(f"Unsupported job kind: {job.kind}")
+    except Exception as exc:  # noqa: BLE001 - worker must record any failure.
+        job.status = BackgroundJob.Status.FAILED
+        job.error_message = str(exc)[:2000]
+    else:
+        job.status = BackgroundJob.Status.DONE
+    job.finished_at = timezone.now()
+    job.save(update_fields=["status", "result", "error_message", "finished_at"])
+
+
+def maybe_generate_daily_report(now=None) -> DailyBriefing | None:
+    """Generate the combined all-accounts report once per day when enabled."""
+    now = now or timezone.now()
+    settings_obj = get_global_settings()
+    if not settings_obj.daily_report_enabled:
+        return None
+    if now.hour < settings_obj.daily_report_hour:
+        return None
+    if settings_obj.last_daily_report_date == now.date():
+        return None
+    briefing = generate_daily_briefing(None)
+    dispatch_daily_report(briefing)
+    settings_obj.last_daily_report_date = now.date()
+    settings_obj.save(update_fields=["last_daily_report_date", "updated_at"])
+    return briefing
+
+
+def dispatch_daily_report(briefing: DailyBriefing) -> int:
+    endpoints = WebhookEndpoint.objects.filter(is_active=True, receive_daily_report=True)
+    delivered = 0
+    for endpoint in endpoints:
+        if _send_briefing(endpoint, briefing):
+            delivered += 1
+    return delivered
+
+
+def _send_briefing(endpoint: WebhookEndpoint, briefing: DailyBriefing) -> bool:
+    secret = decrypt_text(endpoint.encrypted_url)
+    try:
+        if endpoint.provider == WebhookEndpoint.Provider.SLACK:
+            response = requests.post(
+                secret,
+                json={"text": f"{briefing.title}\n\n{briefing.body_markdown[:3500]}"},
+                timeout=15,
+            )
+        elif endpoint.provider == WebhookEndpoint.Provider.NOTION:
+            children = [
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {"type": "text", "text": {"content": chunk[:1900]}}
+                        ]
+                    },
+                }
+                for chunk in briefing.body_markdown.split("\n\n")[:40]
+                if chunk.strip()
+            ]
+            response = requests.post(
+                "https://api.notion.com/v1/pages",
+                headers={
+                    "Authorization": f"Bearer {secret}",
+                    "Notion-Version": "2022-06-28",
+                },
+                json={
+                    "parent": {
+                        "page_id": (endpoint.config or {}).get("notion_parent_page_id", "")
+                    },
+                    "properties": {
+                        "title": {
+                            "title": [
+                                {"type": "text", "text": {"content": briefing.title[:200]}}
+                            ]
+                        }
+                    },
+                    "children": children,
+                },
+                timeout=15,
+            )
+        else:
+            response = requests.post(
+                secret,
+                json={
+                    "source": "infralens-ai",
+                    "type": "daily_report",
+                    "title": briefing.title,
+                    "body_markdown": briefing.body_markdown,
+                    "evidence": briefing.evidence,
+                },
+                timeout=15,
+            )
+        response.raise_for_status()
+    except requests.RequestException:
+        return False
+    return True
+
+
+def create_github_issue(finding: Finding) -> tuple[bool, str]:
+    """Open a GitHub issue for one finding. Returns (ok, message-or-url)."""
+    settings_obj = get_global_settings()
+    repo = settings_obj.github_repo.strip()
+    token = decrypt_text(settings_obj.encrypted_github_token)
+    if not repo or not token:
+        return False, "Configure the GitHub repository and token in Settings first."
+
+    body_lines = [
+        f"**Severity:** {finding.get_severity_display()}",
+        f"**Account:** {finding.account.name} ({finding.account.get_provider_display()})",
+        f"**Category:** {finding.category}",
+    ]
+    if finding.resource_ref:
+        body_lines.append(f"**Resource:** `{finding.resource_ref}`")
+    if finding.suggested_action:
+        body_lines.append(f"\n**Suggested action:** {finding.suggested_action}")
+    if finding.evidence:
+        body_lines.append("\n**Evidence:**\n```json")
+        body_lines.append(str(finding.evidence)[:2000])
+        body_lines.append("```")
+    body_lines.append("\n_Opened by InfraLens AI. Proposals are suggestions only._")
+
+    try:
+        response = requests.post(
+            f"https://api.github.com/repos/{repo}/issues",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+            json={"title": f"[InfraLens] {finding.title}"[:250], "body": "\n".join(body_lines)},
+            timeout=15,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return False, f"GitHub request failed: {str(exc)[:200]}"
+
+    issue_url = response.json().get("html_url", "")
+    if issue_url:
+        finding.github_issue_url = issue_url
+        finding.save(update_fields=["github_issue_url"])
+    return True, issue_url or "Issue created."
 
 
 REMEDIATION_FALLBACK_LABELS = {

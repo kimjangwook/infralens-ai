@@ -24,5 +24,37 @@
       {% endfor %}
     </div>
   </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Invitations</p>
+        <h2>Invite by link</h2>
+      </div>
+    </div>
+    <form class="stack-form" method="post" action="{% url 'invitation_create' %}">
+      {% csrf_token %}
+      {% for field in invitation_form %}
+        <label class="field">
+          <span>{{ field.label }}</span>
+          {{ field }}
+          {% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}
+        </label>
+      {% endfor %}
+      <div class="form-actions">
+        <button class="button primary" type="submit">Create invitation link</button>
+      </div>
+    </form>
+    {% if pending_invitations %}
+      <div class="compact-list">
+        {% for invitation in pending_invitations %}
+          <div>
+            <strong>{{ invitation.note|default:"(no note)" }}</strong>
+            <span>expires {{ invitation.expires_at }}{% if invitation.is_global_admin %} / global admin{% endif %}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
 {% endblock %}
 

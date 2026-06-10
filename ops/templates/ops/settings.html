@@ -31,6 +31,28 @@
     <div class="panel">
       <div class="panel-head">
         <div>
+          <p class="eyebrow">Plan & usage</p>
+          <h2>{{ plan|title }} plan</h2>
+        </div>
+      </div>
+      <div class="settings-note">
+        <strong>Limits</strong>
+        <span>
+          Accounts: {{ account_count }} / {{ limits.accounts }}.
+          Seats: {{ user_count }} / {{ limits.seats }}.
+          AI proposals today: {{ ai_used_today }} / {{ limits.ai_proposals_per_day }}.
+        </span>
+      </div>
+      <p class="muted">
+        This month: {{ usage_month.scan }} scan(s), {{ usage_month.ai_call }} AI call(s).
+        {% if settings_obj.plan_valid_until %}Paid plan valid until {{ settings_obj.plan_valid_until }}.{% endif %}
+        Paid plans activate via the Stripe webhook or Django admin.
+      </p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
           <p class="eyebrow">AI providers</p>
           <h2>Briefing models</h2>
         </div>

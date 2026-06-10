@@ -73,6 +73,25 @@ encrypted fine-grained token. The issue URL is stored on the finding.
 job queue depth). The endpoint returns 404 unless `INFRALENS_METRICS_TOKEN`
 is set, and 403 on a token mismatch.
 
+## Billing webhook
+
+`POST /api/hooks/stripe/` verifies the `Stripe-Signature` header against
+`STRIPE_WEBHOOK_SECRET` (HMAC-SHA256, no SDK). `checkout.session.completed`
+and `customer.subscription.updated` events with `metadata.infralens_plan` set
+to `pro` or `team` activate that plan (expiry from `current_period_end`);
+`customer.subscription.deleted` reverts to Free. Disabled (404) without a
+secret.
+
+Plan limits (accounts, seats, daily AI proposals) are enforced in the app and
+metered per day in `UsageRecord`. Current usage appears under Settings.
+
+## Invitations
+
+Global admins create token links on the Users page. `GET/POST
+/invite/<token>/` lets the recipient create their own account; the preset
+account roles from the invitation are applied on acceptance. Links expire
+after 7 days or on first use, and respect the plan's seat limit.
+
 ## Remediation proposals
 
 `POST /findings/<finding-id>/propose/` (session auth, operator role) generates

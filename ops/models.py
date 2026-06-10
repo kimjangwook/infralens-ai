@@ -369,6 +369,19 @@ class GlobalSettings(models.Model):
     )
     encrypted_github_token = models.TextField(blank=True)
     github_token_hint = models.CharField(max_length=120, blank=True)
+
+    class Plan(models.TextChoices):
+        FREE = "free", "Free"
+        PRO = "pro", "Pro"
+        TEAM = "team", "Team"
+
+    plan = models.CharField(max_length=16, choices=Plan.choices, default=Plan.FREE)
+    plan_valid_until = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Paid plan expiry; after this date limits fall back to Free.",
+    )
+    stripe_customer_id = models.CharField(max_length=120, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -500,6 +513,65 @@ class NotificationSubscription(models.Model):
 
     def __str__(self) -> str:
         return f"{self.endpoint} -> {self.account}"
+
+
+class UsageRecord(models.Model):
+    """Per-day usage counters for plan metering (scans, AI calls)."""
+
+    class Kind(models.TextChoices):
+        SCAN = "scan", "Scan"
+        AI_CALL = "ai_call", "AI call"
+
+    date = models.DateField()
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = [("date", "kind")]
+        ordering = ["-date", "kind"]
+
+    def __str__(self) -> str:
+        return f"{self.date} {self.kind}: {self.count}"
+
+
+class Invitation(models.Model):
+    """Token-link invitation that creates a user with preset account access."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    token = models.CharField(max_length=64, default=generate_webhook_token, unique=True)
+    note = models.CharField(max_length=160, blank=True)
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="sent_invitations",
+    )
+    is_global_admin = models.BooleanField(default=False)
+    account_roles = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Mapping of cloud account id -> role granted on acceptance.",
+    )
+    expires_at = models.DateTimeField()
+    accepted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="accepted_invitation",
+    )
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Invitation {self.token[:8]}..."
+
+    @property
+    def is_usable(self) -> bool:
+        return self.accepted_by is None and self.expires_at > timezone.now()
 
 
 class BackgroundJob(models.Model):

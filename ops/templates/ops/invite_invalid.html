@@ -1,0 +1,17 @@
+{% extends "ops/base.html" %}
+{% block title %}Invitation - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="narrow">
+    <div class="panel">
+      <div class="empty-state">
+        {% if seats_full %}
+          <strong>No seats left.</strong>
+          <p>This workspace reached its plan's user limit. Ask the owner to upgrade.</p>
+        {% else %}
+          <strong>This invitation is no longer valid.</strong>
+          <p>It may have expired or already been used. Ask for a new link.</p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+{% endblock %}

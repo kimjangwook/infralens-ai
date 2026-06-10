@@ -200,9 +200,12 @@ def run_scan_pipeline(account: CloudAccount, *, use_ai: bool = True) -> ScanRun:
     commands, the in-app scheduler, and the inbound trigger webhook so every
     path produces the same artifacts.
     """
+    from .billing import record_usage
+    from .models import UsageRecord
     from .scanners import run_scan
 
     scan_run = run_scan(account)
+    record_usage(UsageRecord.Kind.SCAN)
     if scan_run.status == ScanRun.Status.SUCCESS:
         generate_daily_briefing(account, use_ai=use_ai)
         dispatch_scan_notifications(scan_run)
@@ -443,6 +446,11 @@ def create_remediation_proposal(
     if body is None:
         body = _fallback_remediation(finding, global_settings.report_language)
         status = RemediationProposal.Status.FALLBACK
+    else:
+        from .billing import record_usage
+        from .models import UsageRecord
+
+        record_usage(UsageRecord.Kind.AI_CALL)
     return RemediationProposal.objects.create(
         finding=finding,
         requested_by=requested_by,

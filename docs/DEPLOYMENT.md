@@ -52,6 +52,15 @@ location / {
 | `INFRALENS_AI_ENABLED` | `false` to disable AI calls and always use the fallback briefing. |
 | `INFRALENS_ASYNC_SCANS` | `true` to run scans through the background worker instead of the request. |
 | `INFRALENS_METRICS_TOKEN` | Enables `/metrics` (Prometheus format) when set. |
+| `INFRALENS_DB_ENGINE` | `postgres` switches to the Postgres profile (with `POSTGRES_DB/USER/PASSWORD/HOST/PORT`). |
+| `STRIPE_WEBHOOK_SECRET` | Enables the Stripe billing webhook at `/api/hooks/stripe/`. |
+
+## Hosted / multi-tenant profile
+
+For a hosted deployment, run the Postgres profile, the web container, the
+`scheduler`, and the `worker` with `INFRALENS_ASYNC_SCANS=true`. Activate paid
+plans either through the Stripe webhook (set `metadata.infralens_plan` on the
+checkout session) or manually in Django admin under Global settings.
 
 AI provider keys are configured in the app (Settings -> AI providers), not via
 environment variables, and are stored encrypted.

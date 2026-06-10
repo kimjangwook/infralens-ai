@@ -68,12 +68,27 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "infralens.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / os.getenv("INFRALENS_DB_PATH", "db.sqlite3"),
+# SQLite by default (single-host self-hosting). Set INFRALENS_DB_ENGINE=postgres
+# for the multi-tenant / hosted deployment profile.
+if os.getenv("INFRALENS_DB_ENGINE", "sqlite").lower() == "postgres":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("POSTGRES_DB", "infralens"),
+            "USER": os.getenv("POSTGRES_USER", "infralens"),
+            "PASSWORD": os.getenv("POSTGRES_PASSWORD", ""),
+            "HOST": os.getenv("POSTGRES_HOST", "localhost"),
+            "PORT": os.getenv("POSTGRES_PORT", "5432"),
+            "CONN_MAX_AGE": 60,
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / os.getenv("INFRALENS_DB_PATH", "db.sqlite3"),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -138,6 +153,10 @@ ASYNC_SCANS = os.getenv("INFRALENS_ASYNC_SCANS", "false").lower() in {
 
 # The /metrics endpoint is disabled unless a token is configured.
 METRICS_TOKEN = os.getenv("INFRALENS_METRICS_TOKEN", "")
+
+# Stripe webhook signature secret (whsec_...). The billing webhook is
+# disabled unless this is set.
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
 
 def _env_bool(name: str, default: bool) -> bool:

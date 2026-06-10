@@ -26,6 +26,9 @@ InfraLens is not a Datadog, Wiz, CloudQuery, or Steampipe replacement. It is a b
 - Exposes a tokenized inbound webhook so CI/CD or external cron can trigger scans
 - Serves Prometheus-style metrics at `/metrics` when a metrics token is configured
 - Shows IAM roles / service accounts as identity nodes in the topology map
+- Supports SQLite (default) or Postgres (`INFRALENS_DB_ENGINE=postgres`) deployments
+- Enforces open-core plan tiers (Free/Pro/Team) with usage metering and a Stripe activation webhook
+- Invites teammates with one-click signup links carrying preset account roles
 - Supports multiple AI providers (OpenAI, Anthropic, Google) with per-provider model selection
 - Renders briefings as Markdown, not raw code blocks
 - Supports first-run owner setup, login, users, and per-cloud-account RBAC

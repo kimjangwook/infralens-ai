@@ -1464,3 +1464,190 @@ class IamEdgeTests(TestCase):
         self.assertEqual(len(iam_nodes), 1)
         self.assertEqual(iam_nodes[0].label, "daily-export-role")
         self.assertIn("daily-export-role", render_mermaid(graph))
+
+
+class PlanLimitTests(TestCase):
+    def setUp(self):
+        self.admin = get_user_model().objects.create_user(
+            username="plan-admin", password="x", is_staff=True, is_superuser=True
+        )
+        self.client.force_login(self.admin)
+
+    def test_free_plan_blocks_third_account(self):
+        from .billing import can_add_account
+
+        CloudAccount.objects.create(name="A", provider="aws", account_ref="1")
+        self.assertTrue(can_add_account())
+        CloudAccount.objects.create(name="B", provider="aws", account_ref="2")
+        self.assertFalse(can_add_account())
+
+        response = self.client.get(reverse("account_create"))
+        self.assertEqual(response.status_code, 302)
+
+    def test_expired_paid_plan_falls_back_to_free(self):
+        from datetime import date, timedelta
+
+        from .billing import effective_plan
+
+        settings_obj = GlobalSettings.load()
+        settings_obj.plan = GlobalSettings.Plan.PRO
+        settings_obj.plan_valid_until = date.today() - timedelta(days=1)
+        settings_obj.save()
+
+        self.assertEqual(effective_plan(), GlobalSettings.Plan.FREE)
+
+        settings_obj.plan_valid_until = date.today() + timedelta(days=30)
+        settings_obj.save()
+        self.assertEqual(effective_plan(), GlobalSettings.Plan.PRO)
+
+    def test_usage_recording_increments(self):
+        from .billing import record_usage, usage_today
+        from .models import UsageRecord
+
+        record_usage(UsageRecord.Kind.SCAN)
+        record_usage(UsageRecord.Kind.SCAN, 2)
+
+        self.assertEqual(usage_today(UsageRecord.Kind.SCAN), 3)
+
+
+class StripeWebhookTests(TestCase):
+    def _signed(self, payload: bytes, secret: str) -> str:
+        import hashlib
+        import hmac as hmac_lib
+        import time as time_lib
+
+        timestamp = str(int(time_lib.time()))
+        mac = hmac_lib.new(
+            secret.encode(), f"{timestamp}.".encode() + payload, hashlib.sha256
+        ).hexdigest()
+        return f"t={timestamp},v1={mac}"
+
+    def test_disabled_without_secret(self):
+        response = self.client.post(
+            reverse("stripe_webhook"), data=b"{}", content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 404)
+
+    @override_settings(STRIPE_WEBHOOK_SECRET="whsec_test")
+    def test_invalid_signature_rejected(self):
+        response = self.client.post(
+            reverse("stripe_webhook"),
+            data=b"{}",
+            content_type="application/json",
+            HTTP_STRIPE_SIGNATURE="t=1,v1=bad",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    @override_settings(STRIPE_WEBHOOK_SECRET="whsec_test")
+    def test_checkout_completed_activates_plan(self):
+        import json as json_lib
+
+        payload = json_lib.dumps(
+            {
+                "type": "checkout.session.completed",
+                "data": {
+                    "object": {
+                        "metadata": {"infralens_plan": "pro"},
+                        "customer": "cus_123",
+                    }
+                },
+            }
+        ).encode()
+
+        response = self.client.post(
+            reverse("stripe_webhook"),
+            data=payload,
+            content_type="application/json",
+            HTTP_STRIPE_SIGNATURE=self._signed(payload, "whsec_test"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        settings_obj = GlobalSettings.load()
+        self.assertEqual(settings_obj.plan, GlobalSettings.Plan.PRO)
+        self.assertEqual(settings_obj.stripe_customer_id, "cus_123")
+
+    @override_settings(STRIPE_WEBHOOK_SECRET="whsec_test")
+    def test_subscription_deleted_reverts_to_free(self):
+        import json as json_lib
+
+        settings_obj = GlobalSettings.load()
+        settings_obj.plan = GlobalSettings.Plan.TEAM
+        settings_obj.save()
+
+        payload = json_lib.dumps(
+            {"type": "customer.subscription.deleted", "data": {"object": {}}}
+        ).encode()
+        response = self.client.post(
+            reverse("stripe_webhook"),
+            data=payload,
+            content_type="application/json",
+            HTTP_STRIPE_SIGNATURE=self._signed(payload, "whsec_test"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(GlobalSettings.load().plan, GlobalSettings.Plan.FREE)
+
+
+class InvitationTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+        self.admin = get_user_model().objects.create_user(
+            username="invite-admin", password="x", is_staff=True, is_superuser=True
+        )
+        self.client.force_login(self.admin)
+
+    def _create_invitation(self):
+        from .forms import InvitationForm
+
+        form = InvitationForm(
+            data={
+                "note": "Welcome",
+                "role": AccountMembership.Role.OPERATOR,
+                "invite_accounts": [str(self.account.id)],
+            },
+            accounts=CloudAccount.objects.all(),
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        return form.save(self.admin)
+
+    def test_accept_creates_user_with_memberships(self):
+        invitation = self._create_invitation()
+        self.client.logout()
+
+        response = self.client.post(
+            reverse("invitation_accept", args=[invitation.token]),
+            data={
+                "username": "newbie",
+                "email": "",
+                "password1": "strong-test-pass-123",
+                "password2": "strong-test-pass-123",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        user = get_user_model().objects.get(username="newbie")
+        membership = AccountMembership.objects.get(user=user, account=self.account)
+        self.assertEqual(membership.role, AccountMembership.Role.OPERATOR)
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.accepted_by, user)
+
+    def test_used_invitation_is_rejected(self):
+        invitation = self._create_invitation()
+        self.client.logout()
+        self.client.post(
+            reverse("invitation_accept", args=[invitation.token]),
+            data={
+                "username": "first",
+                "password1": "strong-test-pass-123",
+                "password2": "strong-test-pass-123",
+            },
+        )
+
+        response = self.client.get(reverse("invitation_accept", args=[invitation.token]))
+
+        self.assertEqual(response.status_code, 410)
+
+    def test_unknown_token_rejected(self):
+        self.client.logout()
+        response = self.client.get(reverse("invitation_accept", args=["nope"]))
+        self.assertEqual(response.status_code, 410)

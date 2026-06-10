@@ -446,6 +446,45 @@ class UserAccessForm(forms.Form):
                 AccountMembership.objects.filter(user=self.user_obj, account=account).delete()
 
 
+class InvitationForm(forms.Form):
+    note = forms.CharField(label="Note", required=False, max_length=160)
+    is_global_admin = forms.BooleanField(label="Global admin", required=False)
+    role = forms.ChoiceField(
+        label="Role on selected accounts",
+        choices=AccountMembership.Role.choices,
+        initial=AccountMembership.Role.VIEWER,
+    )
+    invite_accounts = forms.ModelMultipleChoiceField(
+        label="Cloud accounts",
+        queryset=CloudAccount.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+    )
+
+    def __init__(self, *args, accounts, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["invite_accounts"].queryset = accounts
+
+    def save(self, invited_by):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from .models import Invitation
+
+        role = self.cleaned_data["role"]
+        return Invitation.objects.create(
+            note=self.cleaned_data.get("note", ""),
+            invited_by=invited_by,
+            is_global_admin=self.cleaned_data.get("is_global_admin", False),
+            account_roles={
+                str(account.id): role
+                for account in self.cleaned_data.get("invite_accounts", [])
+            },
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
+
 class ScanScheduleForm(forms.ModelForm):
     class Meta:
         model = ScanSchedule

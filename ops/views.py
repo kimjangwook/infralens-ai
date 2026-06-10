@@ -126,6 +126,15 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 
 @global_admin_required
 def account_create(request: HttpRequest) -> HttpResponse:
+    from .billing import can_add_account, plan_limits
+
+    if not can_add_account():
+        messages.error(
+            request,
+            f"Your plan allows {plan_limits()['accounts']} cloud account(s). "
+            "Upgrade the plan or remove an account first.",
+        )
+        return redirect("dashboard")
     if request.method == "POST":
         form = CloudAccountForm(request.POST)
         if form.is_valid():
@@ -188,6 +197,9 @@ def settings_view(request: HttpRequest) -> HttpResponse:
             return redirect("settings")
     else:
         form = GlobalSettingsForm(instance=settings_obj)
+    from .billing import effective_plan, plan_limits, usage_this_month, usage_today
+    from .models import UsageRecord
+
     return render(
         request,
         "ops/settings.html",
@@ -195,6 +207,12 @@ def settings_view(request: HttpRequest) -> HttpResponse:
             "form": form,
             "settings_obj": settings_obj,
             "ai_providers": AIProvider.objects.all(),
+            "plan": effective_plan(),
+            "limits": plan_limits(),
+            "account_count": CloudAccount.objects.count(),
+            "user_count": get_user_model().objects.count(),
+            "ai_used_today": usage_today(UsageRecord.Kind.AI_CALL),
+            "usage_month": usage_this_month(),
         },
     )
 
@@ -452,6 +470,15 @@ def finding_propose_fix(request: HttpRequest, finding_id) -> HttpResponse:
     if not has_account_role(request.user, finding.account, AccountMembership.Role.OPERATOR):
         messages.error(request, "You need operator access to request fix proposals.")
         return redirect("finding_detail", finding_id=finding.id)
+    from .billing import can_generate_proposal_today, plan_limits
+
+    if not can_generate_proposal_today():
+        messages.error(
+            request,
+            f"Daily AI proposal limit reached ({plan_limits()['ai_proposals_per_day']}). "
+            "Try again tomorrow or upgrade the plan.",
+        )
+        return redirect("finding_detail", finding_id=finding.id)
     proposal = create_remediation_proposal(finding, requested_by=request.user)
     if proposal.status == proposal.Status.GENERATED:
         messages.success(request, "AI fix proposal generated.")
@@ -481,6 +508,91 @@ def finding_github_issue(request: HttpRequest, finding_id) -> HttpResponse:
     else:
         messages.error(request, message)
     return redirect("finding_detail", finding_id=finding.id)
+
+
+@csrf_exempt
+@require_POST
+def stripe_webhook(request: HttpRequest) -> JsonResponse:
+    """Stripe billing webhook: activates/deactivates the paid plan.
+
+    Signature-verified with STRIPE_WEBHOOK_SECRET; disabled (404) when no
+    secret is configured.
+    """
+    from django.conf import settings as django_settings
+
+    from .billing import apply_stripe_event, parse_stripe_payload, verify_stripe_signature
+
+    secret = django_settings.STRIPE_WEBHOOK_SECRET
+    if not secret:
+        return JsonResponse({"error": "billing webhook disabled"}, status=404)
+    signature = request.headers.get("Stripe-Signature", "")
+    if not verify_stripe_signature(request.body, signature, secret):
+        return JsonResponse({"error": "invalid signature"}, status=400)
+    try:
+        event = parse_stripe_payload(request.body)
+    except ValueError:
+        return JsonResponse({"error": "invalid payload"}, status=400)
+    outcome = apply_stripe_event(event)
+    return JsonResponse({"received": True, "outcome": outcome})
+
+
+@global_admin_required
+@require_POST
+def invitation_create(request: HttpRequest) -> HttpResponse:
+    from .forms import InvitationForm
+
+    form = InvitationForm(request.POST, accounts=CloudAccount.objects.all())
+    if form.is_valid():
+        invitation = form.save(request.user)
+        accept_url = request.build_absolute_uri(
+            reverse("invitation_accept", args=[invitation.token])
+        )
+        messages.success(
+            request,
+            f"Invitation created. Share this link (valid 7 days): {accept_url}",
+        )
+    else:
+        messages.error(request, "Could not create the invitation.")
+    return redirect("users")
+
+
+@require_http_methods(["GET", "POST"])
+def invitation_accept(request: HttpRequest, token: str) -> HttpResponse:
+    from .billing import can_add_user
+    from .models import Invitation
+
+    invitation = Invitation.objects.filter(token=token).first()
+    if invitation is None or not invitation.is_usable:
+        return render(request, "ops/invite_invalid.html", status=410)
+    if not can_add_user():
+        return render(request, "ops/invite_invalid.html", {"seats_full": True}, status=410)
+
+    if request.method == "POST":
+        form = SetupForm(request.POST)
+        if form.is_valid():
+            user = form.save(commit=False)
+            user.is_staff = invitation.is_global_admin
+            user.is_superuser = invitation.is_global_admin
+            user.save()
+            for account_id, role in (invitation.account_roles or {}).items():
+                account = CloudAccount.objects.filter(id=account_id).first()
+                if account and role in AccountMembership.Role.values:
+                    AccountMembership.objects.update_or_create(
+                        user=user, account=account, defaults={"role": role}
+                    )
+            invitation.accepted_by = user
+            invitation.accepted_at = timezone.now()
+            invitation.save(update_fields=["accepted_by", "accepted_at"])
+            login(request, user)
+            messages.success(request, "Welcome to InfraLens.")
+            return redirect("dashboard")
+    else:
+        form = SetupForm()
+    return render(
+        request,
+        "ops/invite_accept.html",
+        {"form": form, "invitation": invitation},
+    )
 
 
 @require_GET
@@ -602,13 +714,37 @@ def demo_seed(request: HttpRequest) -> HttpResponse:
 @global_admin_required
 @require_GET
 def user_list(request: HttpRequest) -> HttpResponse:
+    from .forms import InvitationForm
+    from .models import Invitation
+
     users = get_user_model().objects.order_by("username")
-    return render(request, "ops/users.html", {"users": users})
+    return render(
+        request,
+        "ops/users.html",
+        {
+            "users": users,
+            "invitation_form": InvitationForm(accounts=CloudAccount.objects.all()),
+            "pending_invitations": [
+                invitation
+                for invitation in Invitation.objects.filter(accepted_by__isnull=True)[:10]
+                if invitation.is_usable
+            ],
+        },
+    )
 
 
 @global_admin_required
 @require_http_methods(["GET", "POST"])
 def user_create(request: HttpRequest) -> HttpResponse:
+    from .billing import can_add_user, plan_limits
+
+    if not can_add_user():
+        messages.error(
+            request,
+            f"Your plan allows {plan_limits()['seats']} user(s). "
+            "Upgrade the plan to add more.",
+        )
+        return redirect("users")
     if request.method == "POST":
         form = ProductUserCreationForm(request.POST)
         if form.is_valid():

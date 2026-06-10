@@ -50,7 +50,7 @@ automatically, and get a fix proposal with one button.
   steps, commands/IaC snippet, rollback plan, and risk — with a deterministic
   fallback when AI is unavailable
 
-## v0.3 — Coverage depth & exports
+## v0.3 — Coverage depth & exports (shipped)
 
 Make the map and briefings cover the signals teams actually pay attention to.
 
@@ -60,7 +60,7 @@ Make the map and briefings cover the signals teams actually pay attention to.
 - Slack-formatted webhook export and Notion export
 - Resource detail pages with finding and proposal history
 
-## v0.4 — Scale & integration
+## v0.4 — Scale & integration (shipped)
 
 Remove the synchronous ceiling and meet teams where they work.
 
@@ -70,7 +70,7 @@ Remove the synchronous ceiling and meet teams where they work.
 - IAM / network edge expansion of the topology graph
 - Prometheus-style metrics endpoint for the scheduler
 
-## v0.5 — Monetization infrastructure
+## v0.5 — Monetization infrastructure (shipped)
 
 Everything needed to charge money without rewriting the product.
 
@@ -79,10 +79,19 @@ Everything needed to charge money without rewriting the product.
 - Usage metering (scans, AI tokens) and plan limits
 - Team workspaces and invitations
 
-## v1.0 — Commercial launch
+## v1.0 — Commercial launch (code complete)
 
-- Hosted GA with SLA
-- Custom rule engine (user-defined detectors and severities)
-- Audit log export, SOC 2 preparation checklist
-- Kubernetes and Azure scanners
-- Public template gallery of webhook/automation recipes
+- Custom rule engine (user-defined detectors and severities) — shipped
+- Audit log export and SOC 2 preparation checklist — shipped
+- Kubernetes and Azure scanners — shipped
+- Template gallery of webhook/automation recipes — shipped (`examples/automation-recipes.md`)
+- Hosted GA with SLA — code-side support shipped (Postgres profile, plans,
+  Stripe webhook, metering); the remaining work is operational: provisioning,
+  status page, support process, and a live Stripe account
+
+## Post-1.0 — Next bets
+
+- Scan-aware cost forecasting on top of the billing data
+- Deeper network/IAM graphing (security groups, VPC peering, role policies)
+- Remediation proposals as ready-to-open pull requests against IaC repos
+- Per-tenant isolation hardening for the hosted offering

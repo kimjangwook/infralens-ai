@@ -10,6 +10,8 @@ InfraLens handles cloud credentials, so the default posture is conservative.
 - Findings store summaries and samples, not full raw logs.
 - Remediation is never executed automatically. AI remediation proposals are Markdown for human review.
 - The inbound scan trigger webhook is authenticated by a per-account random token compared in constant time. The token only allows triggering a scan; it cannot read findings or credentials. Rotate it from the account page if it leaks, and serve it over TLS only.
+- The Stripe billing webhook verifies the `Stripe-Signature` header (HMAC-SHA256 with timestamp tolerance) and is disabled without a configured secret.
+- Logins, account changes, scans, settings changes, and exports are recorded in an append-only audit log exportable as CSV (see docs/SOC2-CHECKLIST.md).
 
 ## Production guidance
 

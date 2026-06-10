@@ -29,6 +29,8 @@ InfraLens is not a Datadog, Wiz, CloudQuery, or Steampipe replacement. It is a b
 - Supports SQLite (default) or Postgres (`INFRALENS_DB_ENGINE=postgres`) deployments
 - Enforces open-core plan tiers (Free/Pro/Team) with usage metering and a Stripe activation webhook
 - Invites teammates with one-click signup links carrying preset account roles
+- Records an audit log of logins, account changes, scans, and exports, with CSV export
+- Manages custom detection rules from the Settings UI (no code required)
 - Supports multiple AI providers (OpenAI, Anthropic, Google) with per-provider model selection
 - Renders briefings as Markdown, not raw code blocks
 - Supports first-run owner setup, login, users, and per-cloud-account RBAC
@@ -58,14 +60,15 @@ Included:
 - Daily briefing generation
 - Generic webhook notifications
 
-Not included yet:
+Not included (by design or yet):
 
-- Kubernetes
-- Azure
 - Automatic remediation (proposals are text only, by design)
 - Full raw log retention
 - Advanced ML anomaly detection
-- Full network/IAM graphing
+- Full network graphing (IAM identity edges are included; deeper network maps are planned)
+
+See also: [automation recipe gallery](examples/automation-recipes.md) and the
+[SOC 2 preparation checklist](docs/SOC2-CHECKLIST.md).
 
 ## Trust Model
 

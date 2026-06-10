@@ -1651,3 +1651,281 @@ class InvitationTests(TestCase):
         self.client.logout()
         response = self.client.get(reverse("invitation_accept", args=["nope"]))
         self.assertEqual(response.status_code, 410)
+
+
+class AuditLogTests(TestCase):
+    def setUp(self):
+        self.admin = get_user_model().objects.create_user(
+            username="audit-admin", password="audit-pass", is_staff=True, is_superuser=True
+        )
+
+    def test_login_is_audited(self):
+        from .models import AuditLog
+
+        self.client.login(username="audit-admin", password="audit-pass")
+
+        self.assertTrue(
+            AuditLog.objects.filter(user=self.admin, action="login").exists()
+        )
+
+    def test_account_actions_are_audited(self):
+        from .models import AuditLog
+
+        self.client.force_login(self.admin)
+        account = seed_demo_data()
+        self.client.post(reverse("account_delete", args=[account.id]))
+
+        self.assertTrue(
+            AuditLog.objects.filter(action="account.delete", target=account.name).exists()
+        )
+
+    def test_csv_export(self):
+        from .audit import record_audit
+
+        record_audit(self.admin, "settings.save")
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse("audit_export"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+        body = response.content.decode()
+        self.assertIn("settings.save", body)
+        self.assertIn("audit-admin", body)
+
+    def test_audit_page_requires_admin(self):
+        plain = get_user_model().objects.create_user(username="plain-user", password="x")
+        self.client.force_login(plain)
+
+        response = self.client.get(reverse("audit"))
+
+        self.assertEqual(response.status_code, 302)
+
+
+class CustomRuleViewTests(TestCase):
+    def setUp(self):
+        self.admin = get_user_model().objects.create_user(
+            username="rule-admin", password="x", is_staff=True, is_superuser=True
+        )
+        self.client.force_login(self.admin)
+
+    def test_create_edit_delete_rule(self):
+        from .models import CustomRule
+
+        response = self.client.post(
+            reverse("rule_create"),
+            data={
+                "name": "No big timeouts",
+                "target": CustomRule.Target.RESOURCE,
+                "field_path": "metadata.timeout",
+                "operator": CustomRule.Operator.GT,
+                "value": "60",
+                "severity": Finding.Severity.WARNING,
+                "suggested_action": "Lower it.",
+                "enabled": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        rule = CustomRule.objects.get(name="No big timeouts")
+
+        response = self.client.post(
+            reverse("rule_edit", args=[rule.id]),
+            data={
+                "name": "No big timeouts",
+                "target": CustomRule.Target.RESOURCE,
+                "field_path": "metadata.timeout",
+                "operator": CustomRule.Operator.GT,
+                "value": "120",
+                "severity": Finding.Severity.WARNING,
+                "suggested_action": "Lower it.",
+                "enabled": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        rule.refresh_from_db()
+        self.assertEqual(rule.value, "120")
+
+        response = self.client.post(reverse("rule_delete", args=[rule.id]))
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(CustomRule.objects.exists())
+
+    def test_settings_page_lists_rules(self):
+        from .models import CustomRule
+
+        CustomRule.objects.create(
+            name="Visible rule",
+            target=CustomRule.Target.SCHEDULE,
+            field_path="state",
+            operator=CustomRule.Operator.EQUALS,
+            value="DISABLED",
+        )
+
+        response = self.client.get(reverse("settings"))
+
+        self.assertContains(response, "Visible rule")
+
+
+class K8sScannerTests(TestCase):
+    def setUp(self):
+        self.account = CloudAccount.objects.create(
+            name="Cluster", provider=CloudAccount.Provider.K8S, account_ref="https://k8s.test"
+        )
+
+    def test_suspended_cronjob_and_unavailable_deployment(self):
+        from .models import ScanRun, Schedule
+        from .scanners.k8s import scan_k8s
+
+        def fake_get(url, timeout=20, verify=True):
+            response = MagicMock()
+            response.status_code = 200
+            response.raise_for_status.return_value = None
+            if "cronjobs" in url:
+                response.json.return_value = {
+                    "items": [
+                        {
+                            "metadata": {"namespace": "jobs", "name": "nightly"},
+                            "spec": {
+                                "schedule": "0 1 * * *",
+                                "suspend": True,
+                                "jobTemplate": {
+                                    "spec": {
+                                        "template": {
+                                            "spec": {
+                                                "containers": [{"image": "repo/img:1"}]
+                                            }
+                                        }
+                                    }
+                                },
+                            },
+                        }
+                    ]
+                }
+            elif "deployments" in url:
+                response.json.return_value = {
+                    "items": [
+                        {
+                            "metadata": {"namespace": "web", "name": "api"},
+                            "spec": {"replicas": 3},
+                            "status": {"availableReplicas": 1},
+                        }
+                    ]
+                }
+            else:
+                response.json.return_value = {"items": []}
+            return response
+
+        scan_run = ScanRun.objects.create(account=self.account)
+        with patch("ops.scanners.k8s.Session") as mock_session_cls:
+            mock_session_cls.return_value.get.side_effect = fake_get
+            summary = scan_k8s(
+                self.account,
+                {"api_server": "https://k8s.test", "token": "tok"},
+                scan_run,
+            )
+
+        self.assertEqual(summary["schedules"], 1)
+        self.assertEqual(summary["resources"], 1)
+        schedule = Schedule.objects.get(account=self.account)
+        self.assertEqual(schedule.state, "SUSPENDED")
+        self.assertTrue(
+            Finding.objects.filter(title__contains="nightly").exists()
+        )
+        self.assertTrue(
+            Finding.objects.filter(title__contains="unavailable replicas").exists()
+        )
+
+    def test_k8s_form_requires_token(self):
+        form = CloudAccountForm(
+            data={
+                "name": "Cluster2",
+                "provider": CloudAccount.Provider.K8S,
+                "k8s_api_server": "https://k8s.test",
+                "k8s_bearer_token": "",
+            }
+        )
+        self.assertFalse(form.is_valid())
+
+        form = CloudAccountForm(
+            data={
+                "name": "Cluster2",
+                "provider": CloudAccount.Provider.K8S,
+                "k8s_api_server": "https://k8s.test",
+                "k8s_bearer_token": "sa-token",
+                "k8s_verify_tls": "on",
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        account = form.save()
+        self.assertEqual(account.account_ref, "https://k8s.test")
+        self.assertEqual(decrypt_json(account.encrypted_credentials)["token"], "sa-token")
+
+
+class AzureScannerTests(TestCase):
+    def setUp(self):
+        self.account = CloudAccount.objects.create(
+            name="Azure Sub", provider=CloudAccount.Provider.AZURE, account_ref="sub-1"
+        )
+
+    def test_stopped_site_and_disabled_workflow(self):
+        from .models import ScanRun, Schedule
+        from .scanners import azure as azure_module
+
+        def fake_get(url, timeout=30):
+            response = MagicMock()
+            response.status_code = 200
+            response.raise_for_status.return_value = None
+            if "Microsoft.Web/sites" in url:
+                response.json.return_value = {
+                    "value": [
+                        {
+                            "id": "/subs/1/sites/fn-app",
+                            "name": "fn-app",
+                            "kind": "functionapp,linux",
+                            "location": "japaneast",
+                            "properties": {"state": "Stopped"},
+                        }
+                    ]
+                }
+            elif "Microsoft.Logic/workflows" in url:
+                response.json.return_value = {
+                    "value": [
+                        {
+                            "id": "/subs/1/workflows/wf",
+                            "name": "wf",
+                            "location": "japaneast",
+                            "properties": {"state": "Disabled"},
+                        }
+                    ]
+                }
+            else:
+                response.json.return_value = {"value": []}
+            return response
+
+        scan_run = ScanRun.objects.create(account=self.account)
+        session = MagicMock()
+        session.get.side_effect = fake_get
+        with patch.object(azure_module, "_authorized_session", return_value=session):
+            summary = azure_module.scan_azure(
+                self.account, {"subscription_id": "sub-1"}, scan_run
+            )
+
+        self.assertEqual(summary["resources"], 1)
+        self.assertEqual(summary["schedules"], 1)
+        self.assertTrue(
+            self.account.resources.filter(resource_type="azure.function_app").exists()
+        )
+        self.assertTrue(Finding.objects.filter(title__contains="fn-app").exists())
+        self.assertEqual(Schedule.objects.get(account=self.account).state, "DISABLED")
+
+    def test_azure_form_requires_all_fields(self):
+        form = CloudAccountForm(
+            data={
+                "name": "Az",
+                "provider": CloudAccount.Provider.AZURE,
+                "azure_tenant_id": "t",
+                "azure_client_id": "c",
+                "azure_client_secret": "",
+                "azure_subscription_id": "s",
+            }
+        )
+        self.assertFalse(form.is_valid())

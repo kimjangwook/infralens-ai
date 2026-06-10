@@ -7,8 +7,11 @@ from .models import (
     DailyBriefing,
     Finding,
     GlobalSettings,
+    AuditLog,
     BackgroundJob,
     CustomRule,
+    Invitation,
+    UsageRecord,
     NotificationDelivery,
     NotificationSubscription,
     RemediationProposal,
@@ -121,6 +124,26 @@ class CustomRuleAdmin(admin.ModelAdmin):
     list_display = ("name", "account", "target", "field_path", "operator", "severity", "enabled")
     list_filter = ("target", "operator", "severity", "enabled")
     search_fields = ("name", "field_path", "value")
+
+
+@admin.register(AuditLog)
+class AuditLogAdmin(admin.ModelAdmin):
+    list_display = ("action", "user", "target", "created_at")
+    list_filter = ("action",)
+    search_fields = ("action", "target", "user__username")
+    readonly_fields = ("user", "action", "target", "metadata", "created_at")
+
+
+@admin.register(UsageRecord)
+class UsageRecordAdmin(admin.ModelAdmin):
+    list_display = ("date", "kind", "count")
+    list_filter = ("kind",)
+
+
+@admin.register(Invitation)
+class InvitationAdmin(admin.ModelAdmin):
+    list_display = ("note", "invited_by", "expires_at", "accepted_by", "created_at")
+    readonly_fields = ("token",)
 
 
 @admin.register(NotificationDelivery)

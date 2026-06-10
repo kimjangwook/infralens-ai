@@ -515,6 +515,29 @@ class NotificationSubscription(models.Model):
         return f"{self.endpoint} -> {self.account}"
 
 
+class AuditLog(models.Model):
+    """Append-only record of security-relevant actions for compliance export."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_entries",
+    )
+    action = models.CharField(max_length=80)
+    target = models.CharField(max_length=300, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.action} by {self.user or 'system'}"
+
+
 class UsageRecord(models.Model):
     """Per-day usage counters for plan metering (scans, AI calls)."""
 

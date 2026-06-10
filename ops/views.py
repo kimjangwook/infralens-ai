@@ -43,6 +43,7 @@ from .models import (
     WebhookEndpoint,
 )
 from .ai import verify_ai_provider
+from .audit import record_audit
 from .services import (
     account_stats,
     create_github_issue,
@@ -144,6 +145,7 @@ def account_create(request: HttpRequest) -> HttpResponse:
                 account=account,
                 defaults={"role": AccountMembership.Role.OWNER},
             )
+            record_audit(request.user, "account.create", account.name)
             messages.success(request, f"{account.name} was added.")
             return redirect("account_detail", account_id=account.id)
     else:
@@ -162,6 +164,7 @@ def account_edit(request: HttpRequest, account_id) -> HttpResponse:
         form = CloudAccountForm(request.POST, instance=account)
         if form.is_valid():
             form.save()
+            record_audit(request.user, "account.edit", account.name)
             messages.success(request, f"{account.name} was updated.")
             return redirect("account_detail", account_id=account.id)
     else:
@@ -182,6 +185,7 @@ def account_delete(request: HttpRequest, account_id) -> HttpResponse:
         return redirect("account_detail", account_id=account.id)
     name = account.name
     account.delete()
+    record_audit(request.user, "account.delete", name)
     messages.success(request, f"{name} was deleted.")
     return redirect("dashboard")
 
@@ -193,12 +197,13 @@ def settings_view(request: HttpRequest) -> HttpResponse:
         form = GlobalSettingsForm(request.POST, instance=settings_obj)
         if form.is_valid():
             form.save()
+            record_audit(request.user, "settings.save")
             messages.success(request, "Settings were saved.")
             return redirect("settings")
     else:
         form = GlobalSettingsForm(instance=settings_obj)
     from .billing import effective_plan, plan_limits, usage_this_month, usage_today
-    from .models import UsageRecord
+    from .models import CustomRule, UsageRecord
 
     return render(
         request,
@@ -207,6 +212,7 @@ def settings_view(request: HttpRequest) -> HttpResponse:
             "form": form,
             "settings_obj": settings_obj,
             "ai_providers": AIProvider.objects.all(),
+            "custom_rules": CustomRule.objects.select_related("account"),
             "plan": effective_plan(),
             "limits": plan_limits(),
             "account_count": CloudAccount.objects.count(),
@@ -327,11 +333,98 @@ def account_scan(request: HttpRequest, account_id) -> HttpResponse:
         )
         return redirect("account_detail", account_id=account.id)
     scan_run = run_scan_pipeline(account)
+    record_audit(request.user, "scan.run", account.name, status=scan_run.status)
     if scan_run.status == scan_run.Status.SUCCESS:
         messages.success(request, f"Scan finished for {account.name}.")
     else:
         messages.error(request, f"Scan failed for {account.name}: {scan_run.error_message}")
     return redirect("account_detail", account_id=account.id)
+
+
+@global_admin_required
+@require_http_methods(["GET", "POST"])
+def rule_create(request: HttpRequest) -> HttpResponse:
+    from .forms import CustomRuleForm
+
+    if request.method == "POST":
+        form = CustomRuleForm(request.POST)
+        if form.is_valid():
+            rule = form.save()
+            record_audit(request.user, "custom_rule.create", rule.name)
+            messages.success(request, f"Custom rule '{rule.name}' was created.")
+            return redirect("settings")
+    else:
+        form = CustomRuleForm()
+    return render(request, "ops/rule_form.html", {"form": form, "is_edit": False})
+
+
+@global_admin_required
+@require_http_methods(["GET", "POST"])
+def rule_edit(request: HttpRequest, rule_id) -> HttpResponse:
+    from .forms import CustomRuleForm
+    from .models import CustomRule
+
+    rule = get_object_or_404(CustomRule, id=rule_id)
+    if request.method == "POST":
+        form = CustomRuleForm(request.POST, instance=rule)
+        if form.is_valid():
+            form.save()
+            record_audit(request.user, "custom_rule.edit", rule.name)
+            messages.success(request, f"Custom rule '{rule.name}' was updated.")
+            return redirect("settings")
+    else:
+        form = CustomRuleForm(instance=rule)
+    return render(request, "ops/rule_form.html", {"form": form, "is_edit": True, "rule": rule})
+
+
+@global_admin_required
+@require_POST
+def rule_delete(request: HttpRequest, rule_id) -> HttpResponse:
+    from .models import CustomRule
+
+    rule = get_object_or_404(CustomRule, id=rule_id)
+    name = rule.name
+    rule.delete()
+    record_audit(request.user, "custom_rule.delete", name)
+    messages.success(request, f"Custom rule '{name}' was deleted.")
+    return redirect("settings")
+
+
+@global_admin_required
+@require_GET
+def audit_list(request: HttpRequest) -> HttpResponse:
+    from .models import AuditLog
+
+    return render(
+        request,
+        "ops/audit.html",
+        {"entries": AuditLog.objects.select_related("user")[:200]},
+    )
+
+
+@global_admin_required
+@require_GET
+def audit_export(request: HttpRequest) -> HttpResponse:
+    import csv
+
+    from .models import AuditLog
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = 'attachment; filename="infralens-audit-log.csv"'
+    writer = csv.writer(response)
+    writer.writerow(["created_at", "user", "action", "target", "metadata"])
+    for entry in AuditLog.objects.select_related("user").iterator():
+        writer.writerow(
+            [
+                entry.created_at.isoformat(),
+                entry.user.username if entry.user else "",
+                entry.action,
+                entry.target,
+                entry.metadata,
+            ]
+        )
+    record_audit(request.user, "audit.export")
+    return response
 
 
 @product_login_required
@@ -421,6 +514,7 @@ def account_token_regenerate(request: HttpRequest, account_id) -> HttpResponse:
         messages.error(request, "You need account admin access to rotate the webhook token.")
         return redirect("account_detail", account_id=account.id)
     account.regenerate_webhook_token()
+    record_audit(request.user, "webhook_token.rotate", account.name)
     messages.success(request, "Webhook trigger URL was rotated. Update any callers.")
     return redirect("account_detail", account_id=account.id)
 
@@ -480,6 +574,7 @@ def finding_propose_fix(request: HttpRequest, finding_id) -> HttpResponse:
         )
         return redirect("finding_detail", finding_id=finding.id)
     proposal = create_remediation_proposal(finding, requested_by=request.user)
+    record_audit(request.user, "proposal.create", finding.title, status=proposal.status)
     if proposal.status == proposal.Status.GENERATED:
         messages.success(request, "AI fix proposal generated.")
     else:
@@ -503,6 +598,7 @@ def finding_github_issue(request: HttpRequest, finding_id) -> HttpResponse:
         messages.error(request, "You need operator access to create GitHub issues.")
         return redirect("finding_detail", finding_id=finding.id)
     ok, message = create_github_issue(finding)
+    record_audit(request.user, "github_issue.create", finding.title, ok=ok)
     if ok:
         messages.success(request, f"GitHub issue created: {message}")
     else:
@@ -583,6 +679,7 @@ def invitation_accept(request: HttpRequest, token: str) -> HttpResponse:
             invitation.accepted_by = user
             invitation.accepted_at = timezone.now()
             invitation.save(update_fields=["accepted_by", "accepted_at"])
+            record_audit(user, "invitation.accept", invitation.token[:8])
             login(request, user)
             messages.success(request, "Welcome to InfraLens.")
             return redirect("dashboard")
@@ -749,6 +846,7 @@ def user_create(request: HttpRequest) -> HttpResponse:
         form = ProductUserCreationForm(request.POST)
         if form.is_valid():
             user = form.save()
+            record_audit(request.user, "user.create", user.username)
             messages.success(request, f"User {user.username} was created.")
             return redirect("user_access", user_id=user.id)
     else:

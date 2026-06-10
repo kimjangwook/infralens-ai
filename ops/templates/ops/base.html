@@ -25,6 +25,7 @@
           {% if request.user.is_staff or request.user.is_superuser %}
             <a href="{% url 'account_create' %}">Add cloud account</a>
             <a href="{% url 'users' %}">Users</a>
+            <a href="{% url 'audit' %}">Audit</a>
             <a href="{% url 'settings' %}">Settings</a>
           {% endif %}
           <a href="{% url 'webhooks' %}">Webhooks</a>

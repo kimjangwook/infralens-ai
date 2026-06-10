@@ -11,6 +11,7 @@ from .models import (
     AccountMembership,
     AIProvider,
     CloudAccount,
+    CustomRule,
     GlobalSettings,
     NotificationSubscription,
     ScanSchedule,
@@ -444,6 +445,28 @@ class UserAccessForm(forms.Form):
                 )
             else:
                 AccountMembership.objects.filter(user=self.user_obj, account=account).delete()
+
+
+class CustomRuleForm(forms.ModelForm):
+    class Meta:
+        model = CustomRule
+        fields = [
+            "name",
+            "account",
+            "target",
+            "field_path",
+            "operator",
+            "value",
+            "severity",
+            "suggested_action",
+            "enabled",
+        ]
+        widgets = {
+            "field_path": forms.TextInput(
+                attrs={"placeholder": "e.g. name, state, metadata.timeout"}
+            ),
+            "suggested_action": forms.Textarea(attrs={"rows": 2}),
+        }
 
 
 class InvitationForm(forms.Form):

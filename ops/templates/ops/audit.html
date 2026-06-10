@@ -1,0 +1,28 @@
+{% extends "ops/base.html" %}
+{% block title %}Audit log - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="dashboard-head">
+    <div>
+      <p class="eyebrow">Compliance</p>
+      <h1>Audit log</h1>
+      <p class="muted">Security-relevant actions: logins, account changes, scans, exports.</p>
+    </div>
+    <a class="button primary" href="{% url 'audit_export' %}">Export CSV</a>
+  </section>
+
+  <section class="panel">
+    <div class="compact-list">
+      {% for entry in entries %}
+        <div>
+          <strong>{{ entry.action }}</strong>
+          <span>
+            {{ entry.created_at }} / {{ entry.user|default:"system" }}
+            {% if entry.target %} / {{ entry.target }}{% endif %}
+          </span>
+        </div>
+      {% empty %}
+        <div class="empty-state"><strong>No audit entries yet.</strong></div>
+      {% endfor %}
+    </div>
+  </section>
+{% endblock %}

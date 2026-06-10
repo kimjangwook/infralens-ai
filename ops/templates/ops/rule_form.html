@@ -1,0 +1,34 @@
+{% extends "ops/base.html" %}
+{% block title %}{% if is_edit %}Edit rule{% else %}Add rule{% endif %} - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="narrow">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Custom rules</p>
+          <h1>{% if is_edit %}Edit {{ rule.name }}{% else %}Add detection rule{% endif %}</h1>
+        </div>
+      </div>
+      <p class="muted">
+        Rules run after every scan against scanned resources or schedules and
+        create findings in the <code>custom</code> category.
+      </p>
+      <form class="stack-form" method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+        {% for field in form %}
+          <label class="field">
+            <span>{{ field.label }}</span>
+            {{ field }}
+            {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+            {% for error in field.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+        {% endfor %}
+        <div class="form-actions">
+          <button class="button primary" type="submit">Save rule</button>
+          <a class="button secondary" href="{% url 'settings' %}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </section>
+{% endblock %}

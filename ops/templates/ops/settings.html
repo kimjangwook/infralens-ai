@@ -53,6 +53,42 @@
     <div class="panel">
       <div class="panel-head">
         <div>
+          <p class="eyebrow">Custom rules</p>
+          <h2>Detection rules</h2>
+        </div>
+        <a class="button primary small" href="{% url 'rule_create' %}">Add rule</a>
+      </div>
+      <div class="compact-list">
+        {% for rule in custom_rules %}
+          <div class="provider-row">
+            <div>
+              <strong>{{ rule.name }}</strong>
+              <span>
+                {{ rule.get_target_display }}.{{ rule.field_path }}
+                {{ rule.get_operator_display|lower }} "{{ rule.value }}"
+                -> {{ rule.get_severity_display }}
+                {% if rule.account %}/ {{ rule.account.name }}{% else %}/ all accounts{% endif %}
+                {% if not rule.enabled %}/ disabled{% endif %}
+              </span>
+            </div>
+            <div class="actions">
+              <a class="button secondary small" href="{% url 'rule_edit' rule.id %}">Edit</a>
+              <form method="post" action="{% url 'rule_delete' rule.id %}"
+                    onsubmit="return confirm('Delete rule {{ rule.name|escapejs }}?');">
+                {% csrf_token %}
+                <button class="button danger small" type="submit">Delete</button>
+              </form>
+            </div>
+          </div>
+        {% empty %}
+          <div class="empty-state"><strong>No custom rules yet.</strong><span>Rules add your own detections on top of the built-in scanners.</span></div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
           <p class="eyebrow">AI providers</p>
           <h2>Briefing models</h2>
         </div>

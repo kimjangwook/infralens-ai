@@ -8,8 +8,12 @@ InfraLens is not a Datadog, Wiz, CloudQuery, or Steampipe replacement. It is a b
 
 ## What It Does
 
-- Scans AWS EventBridge rules, Lambda functions, CloudWatch Logs, and Cost Explorer
-- Scans GCP Cloud Scheduler, Cloud Run, and Cloud Logging
+- Scans AWS EventBridge rules, Lambda functions, CloudWatch Logs, Cost Explorer, and S3 public exposure
+- Scans GCP Cloud Scheduler, Cloud Run, Cloud Logging, GCS public exposure, and (optionally) BigQuery Billing Export
+- Scans Kubernetes CronJobs, Deployments, and warning events with a read-only ServiceAccount token
+- Scans Azure Function/Web Apps, Logic Apps, and the Activity Log with a Reader service principal
+- Reports inventory changes between scans (added/removed resources and schedules)
+- Lets you define custom detection rules evaluated against the inventory on every scan
 - Builds an infrastructure topology map (schedules -> targets -> resources) from scan evidence, rendered as a Mermaid graph
 - Derives topology insights: orphan schedule targets, untriggered workloads, fan-in hotspots
 - Detects schedule, log, cost, and topology findings with evidence
@@ -21,7 +25,8 @@ InfraLens is not a Datadog, Wiz, CloudQuery, or Steampipe replacement. It is a b
 - Renders briefings as Markdown, not raw code blocks
 - Supports first-run owner setup, login, users, and per-cloud-account RBAC
 - Lets admins add, edit, and delete cloud accounts without re-entering stored credentials
-- Sends scan findings to user-owned webhook subscriptions
+- Sends scan findings to user-owned webhook subscriptions (generic JSON, Slack messages, or Notion pages)
+- Provides resource detail pages with related findings and proposal history
 - Stores cloud credentials, AI API keys, and webhook URLs encrypted at rest
 
 ## Current Scope

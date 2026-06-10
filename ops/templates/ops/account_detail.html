@@ -130,7 +130,7 @@
       <div class="panel-head"><h2>Resources</h2></div>
       <div class="compact-list">
         {% for resource in resources %}
-          <div><strong>{{ resource.name }}</strong><span>{{ resource.resource_type }} / {{ resource.region }}</span></div>
+          <div><strong><a href="{% url 'resource_detail' resource.id %}">{{ resource.name }}</a></strong><span>{{ resource.resource_type }} / {{ resource.region }}</span></div>
         {% empty %}
           <div class="empty-state"><strong>No resources scanned yet.</strong></div>
         {% endfor %}

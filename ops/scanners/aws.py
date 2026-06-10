@@ -46,6 +46,7 @@ def scan_aws(account: CloudAccount, credentials: dict, scan_run: ScanRun) -> dic
         _scan_lambda_logs(account, session, region, scan_run, counter, lambda_names_by_arn)
 
     _scan_cost_explorer(account, credentials, scan_run, counter)
+    _scan_s3_exposure(account, credentials, scan_run, counter)
     return {
         "provider": "aws",
         "regions": regions,
@@ -247,6 +248,98 @@ def _scan_cost_explorer(
                 suggested_action="Compare the service with scheduled jobs and recent deployments.",
             )
             counter.findings += 1
+
+
+def _scan_s3_exposure(
+    account: CloudAccount,
+    credentials: dict,
+    scan_run: ScanRun,
+    counter: UpsertCounter,
+) -> None:
+    session = _session(credentials, "us-east-1")
+    client = session.client("s3")
+    try:
+        buckets = client.list_buckets().get("Buckets", [])
+    except (ClientError, BotoCoreError) as exc:
+        upsert_finding(
+            account,
+            scan_run,
+            Finding.Severity.INFO,
+            "exposure",
+            "AWS S3 could not be scanned",
+            evidence={"error": str(exc)[:500]},
+            suggested_action="Grant s3:ListAllMyBuckets and s3:GetBucket* to enable exposure checks.",
+        )
+        counter.findings += 1
+        return
+
+    for bucket in buckets[:200]:
+        name = bucket.get("Name", "")
+        if not name:
+            continue
+        upsert_resource(
+            account,
+            f"arn:aws:s3:::{name}",
+            "aws.s3_bucket",
+            name,
+            "",
+            {"creation_date": str(bucket.get("CreationDate", ""))},
+        )
+        counter.resources += 1
+
+        is_public, pab_gaps = _bucket_public_state(client, name)
+        if is_public:
+            upsert_finding(
+                account,
+                scan_run,
+                Finding.Severity.CRITICAL,
+                "exposure",
+                f"S3 bucket '{name}' is publicly accessible",
+                resource_ref=f"arn:aws:s3:::{name}",
+                evidence={"bucket": name, "policy_status": "public"},
+                suggested_action=(
+                    "Enable the account/bucket public access block and remove public "
+                    "statements from the bucket policy unless this bucket is a website."
+                ),
+            )
+            counter.findings += 1
+        elif pab_gaps:
+            upsert_finding(
+                account,
+                scan_run,
+                Finding.Severity.WARNING,
+                "exposure",
+                f"S3 bucket '{name}' has no complete public access block",
+                resource_ref=f"arn:aws:s3:::{name}",
+                evidence={"bucket": name, "public_access_block_gaps": pab_gaps},
+                suggested_action="Enable all four public access block settings for this bucket.",
+            )
+            counter.findings += 1
+
+
+def _bucket_public_state(client, name: str) -> tuple[bool, list[str]]:
+    """Return (is_public, public-access-block gaps) for one bucket."""
+    is_public = False
+    gaps: list[str] = []
+    try:
+        status = client.get_bucket_policy_status(Bucket=name).get("PolicyStatus", {})
+        is_public = bool(status.get("IsPublic"))
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code not in {"NoSuchBucketPolicy", "AccessDenied"}:
+            raise
+    try:
+        pab = client.get_public_access_block(Bucket=name).get(
+            "PublicAccessBlockConfiguration", {}
+        )
+        gaps = [key for key, enabled in pab.items() if not enabled]
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code == "NoSuchPublicAccessBlockConfiguration":
+            gaps = ["NoPublicAccessBlockConfiguration"]
+        elif code != "AccessDenied":
+            raise
+    return is_public, gaps
 
 
 def _cost_by_service(client, start: str, end: str) -> dict[str, Decimal]:

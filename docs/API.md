@@ -59,6 +59,7 @@ Current coverage:
 - Lambda inventory
 - CloudWatch Logs error/timeout sampling for Lambda log groups
 - Cost Explorer daily service costs
+- S3 bucket inventory with public-policy and public-access-block exposure checks
 
 ## GCP scanner
 
@@ -69,8 +70,33 @@ Current coverage:
 - Cloud Scheduler jobs
 - Cloud Run services and jobs
 - Cloud Logging error sampling
+- GCS bucket inventory with allUsers/allAuthenticatedUsers and public-access-prevention checks
+- BigQuery Billing Export cost anomalies, when a `project.dataset.table` id is configured on the account
 
-Billing export integration is planned as a BigQuery-based scanner.
+## Kubernetes scanner
+
+Uses an API server URL plus a read-only ServiceAccount bearer token (bind the
+`view` ClusterRole). Coverage: CronJobs (as schedules), Deployments with
+unavailable replicas, and warning events.
+
+## Azure scanner
+
+Uses a service principal (tenant, client id/secret, subscription) with the
+Reader role. Coverage: Function/Web Apps (stopped apps flagged), Logic App
+workflows (as schedules), and error-level Activity Log sampling.
+
+## Change diff
+
+Every scan compares its inventory against the previous one. Stale rows are
+deleted so the topology stays current, and a `change` finding lists added and
+removed resources and schedules when something differs.
+
+## Custom rules
+
+`CustomRule` rows (global or per account) are evaluated after every scan
+against resources or schedules. A rule matches one field (`name`, `region`,
+`state`, `metadata.timeout`, ...) with an operator (equals, contains, gt, lt,
+regex, ...) and produces findings in the `custom` category.
 
 ## AI model
 

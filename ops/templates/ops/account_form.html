@@ -84,6 +84,62 @@
             <div class="choice-grid">{{ form.gcp_locations }}</div>
             {% for error in form.gcp_locations.errors %}<small class="error">{{ error }}</small>{% endfor %}
           </div>
+          <label class="field">
+            <span>{{ form.gcp_billing_export_table.label }}</span>
+            {{ form.gcp_billing_export_table }}
+            {% if form.gcp_billing_export_table.help_text %}<small>{{ form.gcp_billing_export_table.help_text }}</small>{% endif %}
+            {% for error in form.gcp_billing_export_table.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+        </section>
+
+        <section class="provider-section" data-provider-section="k8s">
+          <div class="section-title">
+            <strong>Kubernetes read-only access</strong>
+            <span>Used to scan CronJobs, Deployments, and warning events via the cluster API.</span>
+          </div>
+          <label class="field">
+            <span>{{ form.k8s_api_server.label }}</span>
+            {{ form.k8s_api_server }}
+            {% if form.k8s_api_server.help_text %}<small>{{ form.k8s_api_server.help_text }}</small>{% endif %}
+            {% for error in form.k8s_api_server.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <label class="field">
+            <span>{{ form.k8s_bearer_token.label }}</span>
+            {{ form.k8s_bearer_token }}
+            {% if form.k8s_bearer_token.help_text %}<small>{{ form.k8s_bearer_token.help_text }}</small>{% endif %}
+            {% for error in form.k8s_bearer_token.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <label class="field checkbox-field">
+            {{ form.k8s_verify_tls }}
+            <span>{{ form.k8s_verify_tls.label }}</span>
+          </label>
+        </section>
+
+        <section class="provider-section" data-provider-section="azure">
+          <div class="section-title">
+            <strong>Azure service principal (Reader)</strong>
+            <span>Used to scan Function/Web Apps, Logic Apps, and the Activity Log.</span>
+          </div>
+          <label class="field">
+            <span>{{ form.azure_tenant_id.label }}</span>
+            {{ form.azure_tenant_id }}
+            {% for error in form.azure_tenant_id.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <label class="field">
+            <span>{{ form.azure_client_id.label }}</span>
+            {{ form.azure_client_id }}
+            {% for error in form.azure_client_id.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <label class="field">
+            <span>{{ form.azure_client_secret.label }}</span>
+            {{ form.azure_client_secret }}
+            {% for error in form.azure_client_secret.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
+          <label class="field">
+            <span>{{ form.azure_subscription_id.label }}</span>
+            {{ form.azure_subscription_id }}
+            {% for error in form.azure_subscription_id.errors %}<small class="error">{{ error }}</small>{% endfor %}
+          </label>
         </section>
 
         <div class="form-actions">

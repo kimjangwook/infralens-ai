@@ -117,6 +117,35 @@ class CloudAccountForm(forms.ModelForm):
         required=False,
         widget=forms.CheckboxSelectMultiple,
     )
+    gcp_billing_export_table = forms.CharField(
+        label="BigQuery billing export table",
+        required=False,
+        help_text="Optional, project.dataset.table. Enables service-level GCP cost anomaly checks.",
+    )
+    k8s_api_server = forms.CharField(
+        label="Kubernetes API server URL",
+        required=False,
+        help_text="e.g. https://203.0.113.10:6443",
+    )
+    k8s_bearer_token = forms.CharField(
+        label="Kubernetes bearer token",
+        required=False,
+        widget=forms.PasswordInput(render_value=True),
+        help_text="Token of a read-only (view ClusterRole) ServiceAccount.",
+    )
+    k8s_verify_tls = forms.BooleanField(
+        label="Verify Kubernetes TLS certificate",
+        required=False,
+        initial=True,
+    )
+    azure_tenant_id = forms.CharField(label="Azure tenant id", required=False)
+    azure_client_id = forms.CharField(label="Azure client id", required=False)
+    azure_client_secret = forms.CharField(
+        label="Azure client secret",
+        required=False,
+        widget=forms.PasswordInput(render_value=True),
+    )
+    azure_subscription_id = forms.CharField(label="Azure subscription id", required=False)
 
     class Meta:
         model = CloudAccount
@@ -137,6 +166,13 @@ class CloudAccountForm(forms.ModelForm):
         elif account.provider == CloudAccount.Provider.GCP:
             self.fields["gcp_project_id"].initial = account.account_ref
             self.fields["gcp_locations"].initial = account.regions
+            self.fields["gcp_billing_export_table"].initial = (
+                account.options or {}
+            ).get("gcp_billing_export_table", "")
+        elif account.provider == CloudAccount.Provider.K8S:
+            self.fields["k8s_api_server"].initial = account.account_ref
+        elif account.provider == CloudAccount.Provider.AZURE:
+            self.fields["azure_subscription_id"].initial = account.account_ref
 
     def _credentials_provided(self, provider: str, cleaned: dict) -> bool:
         if provider == CloudAccount.Provider.AWS:
@@ -145,6 +181,10 @@ class CloudAccountForm(forms.ModelForm):
             )
         if provider == CloudAccount.Provider.GCP:
             return bool(cleaned.get("gcp_service_account_json"))
+        if provider == CloudAccount.Provider.K8S:
+            return bool(cleaned.get("k8s_bearer_token"))
+        if provider == CloudAccount.Provider.AZURE:
+            return bool(cleaned.get("azure_client_secret"))
         return False
 
     def clean(self) -> dict:
@@ -182,6 +222,26 @@ class CloudAccountForm(forms.ModelForm):
                 cleaned["gcp_service_account"] = parsed
             if not cleaned.get("gcp_locations"):
                 raise forms.ValidationError("Select at least one GCP location.")
+        if provider == CloudAccount.Provider.K8S and not keep_existing:
+            if not cleaned.get("k8s_api_server") or not cleaned.get("k8s_bearer_token"):
+                raise forms.ValidationError(
+                    "Kubernetes API server URL and bearer token are required."
+                )
+        if provider == CloudAccount.Provider.AZURE and not keep_existing:
+            missing = [
+                field
+                for field in (
+                    "azure_tenant_id",
+                    "azure_client_id",
+                    "azure_client_secret",
+                    "azure_subscription_id",
+                )
+                if not cleaned.get(field)
+            ]
+            if missing:
+                raise forms.ValidationError(
+                    "Azure tenant, client id, client secret, and subscription id are required."
+                )
         return cleaned
 
     def save(self, commit: bool = True) -> CloudAccount:
@@ -197,8 +257,15 @@ class CloudAccountForm(forms.ModelForm):
                     "aws_secret_access_key": self.cleaned_data["aws_secret_access_key"],
                     "aws_session_token": self.cleaned_data.get("aws_session_token", ""),
                 }
-        else:
+        elif account.provider == CloudAccount.Provider.GCP:
             account.regions = self.cleaned_data["gcp_locations"]
+            options = dict(account.options or {})
+            billing_table = self.cleaned_data.get("gcp_billing_export_table", "").strip()
+            if billing_table:
+                options["gcp_billing_export_table"] = billing_table
+            else:
+                options.pop("gcp_billing_export_table", None)
+            account.options = options
             if keep_existing:
                 account.account_ref = (
                     self.cleaned_data.get("gcp_project_id", "") or account.account_ref
@@ -208,6 +275,27 @@ class CloudAccountForm(forms.ModelForm):
                 account.account_ref = self.cleaned_data.get("gcp_project_id", "") or payload.get(
                     "project_id", ""
                 )
+        elif account.provider == CloudAccount.Provider.K8S:
+            api_server = self.cleaned_data.get("k8s_api_server", "").strip()
+            if api_server:
+                account.account_ref = api_server
+            if not keep_existing:
+                payload = {
+                    "api_server": api_server or account.account_ref,
+                    "token": self.cleaned_data["k8s_bearer_token"],
+                    "verify_tls": self.cleaned_data.get("k8s_verify_tls", True),
+                }
+        elif account.provider == CloudAccount.Provider.AZURE:
+            subscription = self.cleaned_data.get("azure_subscription_id", "").strip()
+            if subscription:
+                account.account_ref = subscription
+            if not keep_existing:
+                payload = {
+                    "tenant_id": self.cleaned_data["azure_tenant_id"],
+                    "client_id": self.cleaned_data["azure_client_id"],
+                    "client_secret": self.cleaned_data["azure_client_secret"],
+                    "subscription_id": subscription or account.account_ref,
+                }
 
         if payload is not None:
             account.encrypted_credentials = encrypt_json(payload)
@@ -335,18 +423,49 @@ class ScanScheduleForm(forms.ModelForm):
 
 
 class WebhookEndpointForm(forms.ModelForm):
-    webhook_url = forms.URLField(label="Webhook URL")
+    webhook_url = forms.CharField(
+        label="Webhook URL or token",
+        help_text=(
+            "Generic/Slack: the incoming webhook URL. Notion: the integration "
+            "token (secret_...)."
+        ),
+    )
+    notion_parent_page_id = forms.CharField(
+        label="Notion parent page id",
+        required=False,
+        help_text="Required for Notion endpoints; scan pages are created under it.",
+    )
 
     class Meta:
         model = WebhookEndpoint
         fields = ["name", "provider", "is_active"]
+
+    def clean(self) -> dict:
+        cleaned = super().clean()
+        provider = cleaned.get("provider")
+        target = (cleaned.get("webhook_url") or "").strip()
+        if provider == WebhookEndpoint.Provider.NOTION:
+            if not cleaned.get("notion_parent_page_id", "").strip():
+                raise forms.ValidationError("Notion endpoints need a parent page id.")
+        elif target and not target.startswith(("http://", "https://")):
+            raise forms.ValidationError("Webhook URL must start with http:// or https://.")
+        cleaned["webhook_url"] = target
+        return cleaned
 
     def save(self, user, commit: bool = True):
         endpoint = super().save(commit=False)
         url = self.cleaned_data["webhook_url"]
         endpoint.user = user
         endpoint.encrypted_url = encrypt_text(url)
-        endpoint.url_hint = _url_hint(url)
+        endpoint.url_hint = (
+            secret_hint(url)
+            if endpoint.provider == WebhookEndpoint.Provider.NOTION
+            else _url_hint(url)
+        )
+        if endpoint.provider == WebhookEndpoint.Provider.NOTION:
+            endpoint.config = {
+                "notion_parent_page_id": self.cleaned_data["notion_parent_page_id"].strip()
+            }
         if commit:
             endpoint.save()
         return endpoint

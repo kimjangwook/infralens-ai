@@ -1,0 +1,68 @@
+{% extends "ops/base.html" %}
+{% load markdown_extras %}
+{% block title %}{{ resource.name }} - InfraLens AI{% endblock %}
+{% block content %}
+  <section class="dashboard-head">
+    <div>
+      <p class="eyebrow">{{ resource.resource_type }} / {{ resource.region|default:"-" }}</p>
+      <h1>{{ resource.name }}</h1>
+      <p class="muted">{{ resource.provider_id }}</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="{% url 'account_detail' resource.account.id %}">{{ resource.account.name }}</a>
+      <a class="button secondary" href="{% url 'account_topology' resource.account.id %}">Topology</a>
+    </div>
+  </section>
+
+  <section class="layout-two">
+    <div class="panel">
+      <div class="panel-head"><h2>Metadata</h2></div>
+      <pre class="evidence">{{ resource.metadata }}</pre>
+      <p class="muted">Last seen: {{ resource.last_seen_at }}</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Inbound schedules</h2></div>
+      <div class="compact-list">
+        {% for schedule in inbound_schedules %}
+          <div>
+            <strong>{{ schedule.name }}</strong>
+            <span>{{ schedule.schedule_expression|default:"manual" }} / {{ schedule.state|default:"-" }}</span>
+          </div>
+        {% empty %}
+          <div class="empty-state"><strong>No schedules trigger this resource.</strong></div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">History</p>
+        <h2>Related findings</h2>
+      </div>
+    </div>
+    {% include "ops/partials/findings_table.html" with findings=findings %}
+  </section>
+
+  {% if proposals %}
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">History</p>
+          <h2>Remediation proposals</h2>
+        </div>
+      </div>
+      {% for proposal in proposals %}
+        <div class="proposal">
+          <div class="proposal-meta">
+            <span>{{ proposal.get_status_display }}</span>
+            <span>{{ proposal.created_at }}</span>
+            <span>{{ proposal.finding.title }}</span>
+          </div>
+          <div class="briefing-html">{{ proposal.body_markdown|markdown }}</div>
+        </div>
+      {% endfor %}
+    </section>
+  {% endif %}
+{% endblock %}

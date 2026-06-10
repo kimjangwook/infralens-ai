@@ -54,4 +54,11 @@ def credential_hint(provider: str, payload: dict) -> str:
     if provider == "gcp":
         email = payload.get("client_email") or payload.get("service_account_email", "")
         return email or "GCP service account"
+    if provider == "k8s":
+        return payload.get("api_server", "") or "Kubernetes token"
+    if provider == "azure":
+        client_id = payload.get("client_id", "")
+        if len(client_id) >= 8:
+            return f"{client_id[:4]}...{client_id[-4:]}"
+        return "Azure service principal"
     return "encrypted credentials"

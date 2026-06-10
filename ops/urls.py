@@ -45,6 +45,7 @@ urlpatterns = [
         views.account_token_regenerate,
         name="account_token_regenerate",
     ),
+    path("resources/<uuid:resource_id>/", views.resource_detail, name="resource_detail"),
     path("topology/", views.topology_view, name="topology"),
     path("accounts/<uuid:account_id>/topology/", views.topology_view, name="account_topology"),
     path(

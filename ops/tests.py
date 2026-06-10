@@ -925,3 +925,324 @@ class RemediationProposalTests(TestCase):
 
             self.assertEqual(proposal.status, RemediationProposal.Status.GENERATED)
             self.assertIn("Root cause", proposal.body_markdown)
+
+
+class S3ExposureTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+
+    def _client(self, is_public=False, pab_code=None, pab=None):
+        from botocore.exceptions import ClientError
+
+        client = MagicMock()
+        client.list_buckets.return_value = {"Buckets": [{"Name": "data-bucket"}]}
+        client.get_bucket_policy_status.return_value = {
+            "PolicyStatus": {"IsPublic": is_public}
+        }
+        if pab_code:
+            client.get_public_access_block.side_effect = ClientError(
+                {"Error": {"Code": pab_code}}, "GetPublicAccessBlock"
+            )
+        else:
+            client.get_public_access_block.return_value = {
+                "PublicAccessBlockConfiguration": pab
+                or {
+                    "BlockPublicAcls": True,
+                    "IgnorePublicAcls": True,
+                    "BlockPublicPolicy": True,
+                    "RestrictPublicBuckets": True,
+                }
+            }
+        return client
+
+    def _run(self, client):
+        from .models import ScanRun
+        from .scanners import aws as aws_module
+        from .scanners.common import UpsertCounter
+
+        scan_run = ScanRun.objects.create(account=self.account)
+        session = MagicMock()
+        session.client.return_value = client
+        with patch.object(aws_module, "_session", return_value=session):
+            aws_module._scan_s3_exposure(self.account, {}, scan_run, UpsertCounter())
+
+    def test_public_bucket_is_critical(self):
+        self._run(self._client(is_public=True))
+
+        finding = Finding.objects.get(category="exposure", severity=Finding.Severity.CRITICAL)
+        self.assertIn("data-bucket", finding.title)
+
+    def test_missing_public_access_block_is_warning(self):
+        self._run(self._client(pab_code="NoSuchPublicAccessBlockConfiguration"))
+
+        finding = Finding.objects.get(category="exposure", severity=Finding.Severity.WARNING)
+        self.assertIn("public access block", finding.title)
+
+    def test_locked_down_bucket_creates_no_finding(self):
+        self._run(self._client())
+
+        self.assertFalse(
+            Finding.objects.filter(category="exposure").exclude(
+                severity=Finding.Severity.INFO
+            ).exists()
+        )
+        self.assertTrue(
+            self.account.resources.filter(resource_type="aws.s3_bucket").exists()
+        )
+
+
+class GCSExposureTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+
+    def _fake_session(self, bindings, prevention="enforced"):
+        def fake_get(url, timeout=20):
+            response = MagicMock()
+            response.status_code = 200
+            response.raise_for_status.return_value = None
+            if url.endswith("/iam"):
+                response.json.return_value = {"bindings": bindings}
+            else:
+                response.json.return_value = {
+                    "items": [
+                        {
+                            "name": "assets",
+                            "location": "ASIA-NORTHEAST1",
+                            "storageClass": "STANDARD",
+                            "iamConfiguration": {"publicAccessPrevention": prevention},
+                        }
+                    ]
+                }
+            return response
+
+        session = MagicMock()
+        session.get.side_effect = fake_get
+        return session
+
+    def test_public_binding_is_critical(self):
+        from .models import ScanRun
+        from .scanners import gcp as gcp_module
+        from .scanners.common import UpsertCounter
+
+        scan_run = ScanRun.objects.create(account=self.account)
+        session = self._fake_session(
+            [{"role": "roles/storage.objectViewer", "members": ["allUsers"]}]
+        )
+        gcp_module._scan_gcs_exposure(self.account, session, "proj", scan_run, UpsertCounter())
+
+        finding = Finding.objects.get(category="exposure", severity=Finding.Severity.CRITICAL)
+        self.assertIn("assets", finding.title)
+
+    def test_unenforced_prevention_is_warning(self):
+        from .models import ScanRun
+        from .scanners import gcp as gcp_module
+        from .scanners.common import UpsertCounter
+
+        scan_run = ScanRun.objects.create(account=self.account)
+        session = self._fake_session([], prevention="inherited")
+        gcp_module._scan_gcs_exposure(self.account, session, "proj", scan_run, UpsertCounter())
+
+        self.assertTrue(
+            Finding.objects.filter(
+                category="exposure", severity=Finding.Severity.WARNING
+            ).exists()
+        )
+
+
+class ChangeDiffTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+        from django.utils import timezone
+
+        self.account.last_scan_at = timezone.now()
+        self.account.save(update_fields=["last_scan_at"])
+
+    def test_removed_and_added_resources_are_reported(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from .models import Resource, ScanRun
+        from .scanners.base import _apply_change_diff
+
+        stale = Resource.objects.create(
+            account=self.account,
+            provider_id="arn:aws:lambda:ap-northeast-1:1:function:gone",
+            resource_type="aws.lambda",
+            name="gone",
+            last_seen_at=timezone.now() - timedelta(days=2),
+        )
+        previous = {stale.provider_id: "gone"}
+        scan_run = ScanRun.objects.create(account=self.account)
+        scan_run.mark_running()
+        # Simulate the scanner refreshing the surviving resource during the scan.
+        self.account.resources.filter(name="daily-export").update(
+            last_seen_at=timezone.now()
+        )
+
+        changes = _apply_change_diff(self.account, scan_run, True, previous, {})
+
+        self.assertIn("gone", changes["resources_removed"])
+        self.assertIn("daily-export", changes["resources_added"])
+        self.assertFalse(Resource.objects.filter(id=stale.id).exists())
+        self.assertTrue(Finding.objects.filter(category="change").exists())
+
+
+class WebhookProviderTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+
+    def test_slack_payload_shape(self):
+        from .models import ScanRun
+        from .services import _slack_payload
+
+        scan_run = ScanRun.objects.create(account=self.account)
+        findings = list(Finding.objects.filter(account=self.account))
+
+        payload = _slack_payload(scan_run, findings)
+
+        self.assertIn("blocks", payload)
+        self.assertEqual(payload["blocks"][0]["type"], "header")
+        self.assertIn("InfraLens", payload["text"])
+
+    def test_notion_payload_uses_parent_page(self):
+        from .models import ScanRun
+        from .services import _notion_payload
+
+        user = get_user_model().objects.create_user(username="notion-user")
+        endpoint = WebhookEndpoint.objects.create(
+            user=user,
+            name="Notion",
+            provider=WebhookEndpoint.Provider.NOTION,
+            encrypted_url=encrypt_text("secret_token"),
+            config={"notion_parent_page_id": "page-123"},
+        )
+        scan_run = ScanRun.objects.create(account=self.account)
+        findings = list(Finding.objects.filter(account=self.account))
+
+        payload = _notion_payload(endpoint, scan_run, findings)
+
+        self.assertEqual(payload["parent"]["page_id"], "page-123")
+        self.assertGreaterEqual(len(payload["children"]), 1)
+
+    def test_notion_form_requires_parent_page(self):
+        form = WebhookEndpointForm(
+            data={
+                "name": "Notion",
+                "provider": WebhookEndpoint.Provider.NOTION,
+                "webhook_url": "secret_abc",
+                "is_active": "on",
+            }
+        )
+        self.assertFalse(form.is_valid())
+
+        form = WebhookEndpointForm(
+            data={
+                "name": "Notion",
+                "provider": WebhookEndpoint.Provider.NOTION,
+                "webhook_url": "secret_abc",
+                "notion_parent_page_id": "page-1",
+                "is_active": "on",
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+
+
+class CustomRuleTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+
+    def test_metadata_rule_matches_resource(self):
+        from .models import CustomRule, ScanRun
+        from .rules import evaluate_custom_rules
+
+        CustomRule.objects.create(
+            name="Long Lambda timeout",
+            target=CustomRule.Target.RESOURCE,
+            field_path="metadata.timeout",
+            operator=CustomRule.Operator.GT,
+            value="30",
+            severity=Finding.Severity.WARNING,
+            suggested_action="Lower the timeout.",
+        )
+        scan_run = ScanRun.objects.create(account=self.account)
+
+        created = evaluate_custom_rules(self.account, scan_run)
+
+        self.assertEqual(created, 1)
+        finding = Finding.objects.get(category="custom")
+        self.assertIn("Long Lambda timeout", finding.title)
+        self.assertIn("daily-export", finding.title)
+
+    def test_rule_scoped_to_other_account_is_skipped(self):
+        from .models import CustomRule, ScanRun
+        from .rules import evaluate_custom_rules
+
+        other = CloudAccount.objects.create(
+            name="Other", provider=CloudAccount.Provider.AWS, account_ref="999"
+        )
+        CustomRule.objects.create(
+            name="Scoped",
+            account=other,
+            target=CustomRule.Target.RESOURCE,
+            field_path="name",
+            operator=CustomRule.Operator.CONTAINS,
+            value="daily",
+        )
+        scan_run = ScanRun.objects.create(account=self.account)
+
+        self.assertEqual(evaluate_custom_rules(self.account, scan_run), 0)
+
+    def test_regex_operator(self):
+        from .rules import _matches
+        from .models import CustomRule
+
+        self.assertTrue(_matches(CustomRule.Operator.REGEX, "daily-export", r"^daily-"))
+        self.assertFalse(_matches(CustomRule.Operator.REGEX, "daily-export", r"["))
+
+
+class ResourceDetailViewTests(TestCase):
+    def setUp(self):
+        self.account = seed_demo_data()
+        self.user = get_user_model().objects.create_user(
+            username="res-admin", password="x", is_staff=True, is_superuser=True
+        )
+        self.client.force_login(self.user)
+
+    def test_resource_page_shows_related_findings(self):
+        resource = self.account.resources.get(name="daily-export")
+
+        response = self.client.get(reverse("resource_detail", args=[resource.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "daily-export")
+        self.assertContains(response, "Inbound schedules")
+
+    def test_non_member_cannot_view_resource(self):
+        outsider = get_user_model().objects.create_user(username="outsider", password="x")
+        self.client.force_login(outsider)
+        resource = self.account.resources.first()
+
+        response = self.client.get(reverse("resource_detail", args=[resource.id]))
+
+        self.assertEqual(response.status_code, 404)
+
+
+class BillingExportValidationTests(TestCase):
+    def test_invalid_table_id_creates_info_finding(self):
+        from .models import ScanRun
+        from .scanners import gcp as gcp_module
+        from .scanners.common import UpsertCounter
+
+        account = seed_demo_data()
+        scan_run = ScanRun.objects.create(account=account)
+        session = MagicMock()
+
+        gcp_module._scan_billing_export(
+            account, session, "proj", "bad table; DROP", scan_run, UpsertCounter()
+        )
+
+        session.post.assert_not_called()
+        self.assertTrue(
+            Finding.objects.filter(title="GCP billing export table id is invalid").exists()
+        )

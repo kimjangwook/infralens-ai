@@ -307,6 +307,41 @@ def account_scan(request: HttpRequest, account_id) -> HttpResponse:
 
 @product_login_required
 @require_GET
+def resource_detail(request: HttpRequest, resource_id) -> HttpResponse:
+    from django.db.models import Q
+
+    from .models import RemediationProposal, Resource
+
+    resource = get_object_or_404(
+        Resource.objects.select_related("account").filter(
+            account__in=accessible_accounts(request.user)
+        ),
+        id=resource_id,
+    )
+    related_findings = Finding.objects.filter(account=resource.account).filter(
+        Q(resource_ref__icontains=resource.provider_id)
+        | Q(resource_ref__icontains=resource.name)
+    )[:40]
+    proposals = RemediationProposal.objects.select_related("finding").filter(
+        finding__in=related_findings
+    )[:10]
+    inbound_schedules = resource.account.schedules.filter(
+        Q(target_ref=resource.provider_id) | Q(target_ref__icontains=resource.name)
+    )[:20]
+    return render(
+        request,
+        "ops/resource_detail.html",
+        {
+            "resource": resource,
+            "findings": related_findings,
+            "proposals": proposals,
+            "inbound_schedules": inbound_schedules,
+        },
+    )
+
+
+@product_login_required
+@require_GET
 def topology_view(request: HttpRequest, account_id=None) -> HttpResponse:
     accounts = accessible_accounts(request.user)
     account = None

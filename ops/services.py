@@ -21,6 +21,7 @@ from .models import (
     Resource,
     Schedule,
     ScanRun,
+    WebhookEndpoint,
 )
 
 
@@ -373,12 +374,8 @@ def dispatch_scan_notifications(scan_run: ScanRun) -> int:
     return delivered
 
 
-def _send_webhook(
-    subscription: NotificationSubscription,
-    scan_run: ScanRun,
-    findings: list[Finding],
-) -> None:
-    payload = {
+def _generic_payload(scan_run: ScanRun, findings: list[Finding]) -> dict:
+    return {
         "source": "infralens-ai",
         "account": {
             "id": str(scan_run.account_id),
@@ -404,17 +401,88 @@ def _send_webhook(
             for finding in findings[:10]
         ],
     }
+
+
+def _slack_payload(scan_run: ScanRun, findings: list[Finding]) -> dict:
+    """Slack incoming-webhook message with one section per finding."""
+    header = (
+        f"InfraLens: {len(findings)} finding(s) for {scan_run.account.name} "
+        f"({scan_run.account.get_provider_display()})"
+    )
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": header[:150]}},
+    ]
+    for finding in findings[:10]:
+        text = f"*{finding.severity.upper()}* {finding.title}"
+        if finding.suggested_action:
+            text += f"\n_{finding.suggested_action}_"
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": text[:2900]}}
+        )
+    return {"text": header, "blocks": blocks}
+
+
+def _notion_payload(endpoint: WebhookEndpoint, scan_run: ScanRun, findings: list[Finding]) -> dict:
+    """Notion create-page request appending findings under the configured parent."""
+    title = f"InfraLens scan - {scan_run.account.name}"
+    children = [
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "content": f"[{finding.severity}] {finding.title}"[:1900]
+                        },
+                    }
+                ]
+            },
+        }
+        for finding in findings[:20]
+    ]
+    return {
+        "parent": {"page_id": (endpoint.config or {}).get("notion_parent_page_id", "")},
+        "properties": {
+            "title": {"title": [{"type": "text", "text": {"content": title[:200]}}]}
+        },
+        "children": children,
+    }
+
+
+def _send_webhook(
+    subscription: NotificationSubscription,
+    scan_run: ScanRun,
+    findings: list[Finding],
+) -> None:
+    endpoint = subscription.endpoint
+    secret = decrypt_text(endpoint.encrypted_url)
     summary = {
         "finding_count": len(findings),
         "min_severity": subscription.min_severity,
         "account": scan_run.account.name,
+        "provider": endpoint.provider,
     }
     try:
-        response = requests.post(
-            decrypt_text(subscription.endpoint.encrypted_url),
-            json=payload,
-            timeout=15,
-        )
+        if endpoint.provider == WebhookEndpoint.Provider.SLACK:
+            response = requests.post(
+                secret, json=_slack_payload(scan_run, findings), timeout=15
+            )
+        elif endpoint.provider == WebhookEndpoint.Provider.NOTION:
+            response = requests.post(
+                "https://api.notion.com/v1/pages",
+                headers={
+                    "Authorization": f"Bearer {secret}",
+                    "Notion-Version": "2022-06-28",
+                },
+                json=_notion_payload(endpoint, scan_run, findings),
+                timeout=15,
+            )
+        else:
+            response = requests.post(
+                secret, json=_generic_payload(scan_run, findings), timeout=15
+            )
         response.raise_for_status()
     except requests.RequestException as exc:
         NotificationDelivery.objects.create(

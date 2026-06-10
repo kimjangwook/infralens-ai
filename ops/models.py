@@ -17,6 +17,8 @@ class CloudAccount(models.Model):
     class Provider(models.TextChoices):
         AWS = "aws", "AWS"
         GCP = "gcp", "GCP"
+        K8S = "k8s", "Kubernetes"
+        AZURE = "azure", "Azure"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=120)
@@ -27,6 +29,11 @@ class CloudAccount(models.Model):
         help_text="AWS account alias/id or GCP project id.",
     )
     regions = models.JSONField(default=list, blank=True)
+    options = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Provider-specific options, e.g. gcp_billing_export_table.",
+    )
     encrypted_credentials = models.TextField(blank=True)
     credentials_hint = models.CharField(max_length=160, blank=True)
     webhook_token = models.CharField(
@@ -413,6 +420,8 @@ class AIProvider(models.Model):
 class WebhookEndpoint(models.Model):
     class Provider(models.TextChoices):
         GENERIC = "generic", "Generic webhook"
+        SLACK = "slack", "Slack incoming webhook"
+        NOTION = "notion", "Notion page export"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
@@ -428,6 +437,11 @@ class WebhookEndpoint(models.Model):
     )
     encrypted_url = models.TextField()
     url_hint = models.CharField(max_length=180, blank=True)
+    config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Provider-specific options, e.g. notion_parent_page_id.",
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -465,6 +479,60 @@ class NotificationSubscription(models.Model):
 
     def __str__(self) -> str:
         return f"{self.endpoint} -> {self.account}"
+
+
+class CustomRule(models.Model):
+    """User-defined detector evaluated against the inventory after each scan.
+
+    Rules match a field on scanned resources or schedules with a simple
+    operator; matches become findings in the ``custom`` category.
+    """
+
+    class Target(models.TextChoices):
+        RESOURCE = "resource", "Resource"
+        SCHEDULE = "schedule", "Schedule"
+
+    class Operator(models.TextChoices):
+        EQUALS = "equals", "Equals"
+        NOT_EQUALS = "not_equals", "Does not equal"
+        CONTAINS = "contains", "Contains"
+        NOT_CONTAINS = "not_contains", "Does not contain"
+        GT = "gt", "Greater than (numeric)"
+        LT = "lt", "Less than (numeric)"
+        REGEX = "regex", "Matches regex"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=120)
+    account = models.ForeignKey(
+        CloudAccount,
+        on_delete=models.CASCADE,
+        related_name="custom_rules",
+        null=True,
+        blank=True,
+        help_text="Leave empty to apply the rule to every account.",
+    )
+    target = models.CharField(max_length=16, choices=Target.choices)
+    field_path = models.CharField(
+        max_length=160,
+        help_text="Field to inspect, e.g. name, region, state, metadata.timeout.",
+    )
+    operator = models.CharField(max_length=16, choices=Operator.choices)
+    value = models.CharField(max_length=240)
+    severity = models.CharField(
+        max_length=16,
+        choices=Finding.Severity.choices,
+        default=Finding.Severity.WARNING,
+    )
+    suggested_action = models.TextField(blank=True)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
 
 
 class NotificationDelivery(models.Model):
